@@ -22,7 +22,7 @@ import (
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
-func (c *Client) PortForward(ctx context.Context, opts kpg.Options, t kpg.Target, localPort int, out io.Writer, errOut io.Writer, readyCh chan struct{}) error {
+func (c *Client) PortForward(ctx context.Context, opts kpg.Options, t kpg.Target, localPort int, _ io.Writer, errOut io.Writer, readyCh chan struct{}) error {
 	pod, remotePort, err := c.resolveServicePod(ctx, t)
 	if err != nil {
 		return err
@@ -56,7 +56,7 @@ func (c *Client) PortForward(ctx context.Context, opts kpg.Options, t kpg.Target
 	}()
 
 	ports := []string{strconv.Itoa(localPort) + ":" + strconv.Itoa(int(remotePort))}
-	forwarder, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, ports, stopCh, readyCh, errOut, errOut)
+	forwarder, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, ports, stopCh, readyCh, io.Discard, errOut)
 	if err != nil {
 		return err
 	}
