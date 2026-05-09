@@ -1,6 +1,7 @@
 /kpg
 /dist/
 /coverage.out
+/coverage.html
 /.idea/
 /.vscode/
 .DS_Store
