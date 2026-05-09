@@ -40,6 +40,38 @@ func TestListTargetsAcrossNamespaces(t *testing.T) {
 	}
 }
 
+func TestListTargetsSkipsInvalidObjectsAndZalandoFallbacks(t *testing.T) {
+	c := fakeClient(
+		[]runtime.Object{
+			cnpgCluster("", "missing-namespace", "", ""),
+			cnpgCluster("app", "", "", ""),
+			zalandoCluster("legacy", "acid-users", nil, map[string][]string{
+				"reporting_user": {},
+				"app_user":       {},
+			}),
+			zalandoCluster("legacy", "acid-cross", map[string]string{"app": "appspace.db_user"}, nil),
+		},
+		nil,
+	)
+
+	targets, err := c.ListTargets(context.Background(), kpg.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kpg.SortTargets(targets)
+	if got, want := targetIDs(targets), []string{"legacy/acid-cross", "legacy/acid-users"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("target ids = %#v, want %#v", got, want)
+	}
+	cross := targets[0]
+	if cross.User != "appspace.db_user" || cross.SecretNamespace != "appspace" || cross.SecretName != "db_user.acid-cross.credentials.postgresql.acid.zalan.do" {
+		t.Fatalf("cross namespace secret fields missing: %#v", cross)
+	}
+	users := targets[1]
+	if users.Database != "" || users.User != "app_user" || users.SecretNamespace != "legacy" {
+		t.Fatalf("user fallback fields missing: %#v", users)
+	}
+}
+
 func TestListTargetsNamespaceRestriction(t *testing.T) {
 	c := fakeClient(
 		[]runtime.Object{
@@ -146,5 +178,60 @@ func TestContextNamesFromConfig(t *testing.T) {
 func TestDecodeLegacySecretValue(t *testing.T) {
 	if got := DecodeLegacySecretValue(map[string]string{"dbname": "YXBwZGI="}, "dbname"); got != "appdb" {
 		t.Fatalf("decoded %q", got)
+	}
+	if got := DecodeLegacySecretValue(nil, "dbname"); got != "" {
+		t.Fatalf("nil map decoded %q", got)
+	}
+	if got := DecodeLegacySecretValue(map[string]string{"dbname": "not-base64"}, "dbname"); got != "" {
+		t.Fatalf("invalid base64 decoded %q", got)
+	}
+}
+
+func TestReadCredentialsFallsBackToTargetMetadata(t *testing.T) {
+	c := fakeClient(nil, []runtime.Object{
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-db-app", Namespace: "app"},
+			Data: map[string][]byte{
+				"password": []byte("secret"),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "legacy-db-app", Namespace: "app"},
+			Data: map[string][]byte{
+				"username": []byte("legacy"),
+				"database": []byte("legacydb"),
+			},
+		},
+	})
+
+	secret, found, err := c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{
+		Namespace: "app",
+		Cluster:   "app-db",
+		User:      "target-user",
+		Database:  "target-db",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected secret")
+	}
+	if secret.Username != "target-user" || secret.Database != "target-db" || secret.Password != "secret" {
+		t.Fatalf("unexpected fallback secret: %#v", secret)
+	}
+
+	secret, found, err = c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{
+		Namespace:  "app",
+		Cluster:    "ignored",
+		SecretName: "legacy-db-app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected legacy database secret")
+	}
+	if secret.Username != "legacy" || secret.Database != "legacydb" {
+		t.Fatalf("unexpected legacy database secret: %#v", secret)
 	}
 }

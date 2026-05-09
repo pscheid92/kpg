@@ -257,6 +257,9 @@ func TestConnectExecReturnsClientExitCode(t *testing.T) {
 	if exitErr.ExitCode() != 7 {
 		t.Fatalf("exit code = %d", exitErr.ExitCode())
 	}
+	if got, want := exitErr.Error(), "command exited with code 7"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
 }
 
 func TestConnectRejectsOutputWithCommand(t *testing.T) {
