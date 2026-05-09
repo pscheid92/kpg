@@ -23,7 +23,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - run: go mod download
       - name: Verify go.mod and go.sum are tidy
         run: |
@@ -50,5 +50,5 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - run: just race
