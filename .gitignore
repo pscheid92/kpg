@@ -1,0 +1,6 @@
+/kpg
+/dist/
+/coverage.out
+/.idea/
+/.vscode/
+.DS_Store

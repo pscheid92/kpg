@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  PQSIGN_VERSION: v0.1.0
+  PQSIGN_SECRET_KEY_PATH: /tmp/pqsign/release.key
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pqsign
+        run: |
+          curl -fsSL -o /tmp/pqsign.tar.gz "https://github.com/pscheid92/pqsign/releases/download/${PQSIGN_VERSION}/pqsign-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/pqsign.tar.gz -C /usr/local/bin pqsign
+          chmod +x /usr/local/bin/pqsign
+          pqsign version
+      - name: Decode pqsign signing key
+        run: |
+          install -m 700 -d "$(dirname "$PQSIGN_SECRET_KEY_PATH")"
+          printf '%s' "$PQSIGN_SECRET_KEY" | base64 -d > "$PQSIGN_SECRET_KEY_PATH"
+          chmod 600 "$PQSIGN_SECRET_KEY_PATH"
+        env:
+          PQSIGN_SECRET_KEY: ${{ secrets.PQSIGN_SECRET_KEY }}
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PQSIGN_SECRET_KEY_PATH: ${{ env.PQSIGN_SECRET_KEY_PATH }}
+          PQSIGN_PASSWORD: ${{ secrets.PQSIGN_PASSWORD }}
+      - name: Shred pqsign signing key
+        if: always()
+        run: shred -u "$PQSIGN_SECRET_KEY_PATH" 2>/dev/null || rm -f "$PQSIGN_SECRET_KEY_PATH"

@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - nilerr
+    - nilnesserr
+    - unconvert
+    - wastedassign
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
