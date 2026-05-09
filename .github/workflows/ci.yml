@@ -29,7 +29,17 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-      - run: just test
+      - run: just coverage
+      - name: Add coverage summary
+        run: |
+          echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | grep '^total:' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
       - run: just vet
       - uses: golangci/golangci-lint-action@v9
         with:

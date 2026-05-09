@@ -1,3 +1,8 @@
+[![CI](https://github.com/pscheid92/kpg/actions/workflows/ci.yml/badge.svg)](https://github.com/pscheid92/kpg/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pscheid92/kpg.svg)](https://pkg.go.dev/github.com/pscheid92/kpg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pscheid92/kpg)](https://goreportcard.com/report/github.com/pscheid92/kpg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 # kpg
 
 `kpg` is a narrow, command-first CLI for connecting to Kubernetes-hosted Postgres databases.
@@ -155,6 +160,8 @@ The first database in `spec.databases`, sorted by name, is used as the default d
 
 ```sh
 just check
+just coverage
+just coverage-html
 just acceptance app/app-db
 just release-snapshot
 just release-snapshot-signed
