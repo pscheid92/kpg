@@ -29,6 +29,50 @@ func TestRootHelpShowsShortFlags(t *testing.T) {
 	}
 }
 
+func TestPublicRootCommandHelp(t *testing.T) {
+	var out bytes.Buffer
+	cmd := NewRootCommand(&out, io.Discard)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "Connect to Kubernetes-hosted Postgres databases") || !strings.Contains(got, "connect") {
+		t.Fatalf("unexpected help:\n%s", got)
+	}
+}
+
+func TestRootRejectsInvalidSharedFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "output",
+			args: []string{"list", "-o", "yaml"},
+			want: `invalid --output "yaml"`,
+		},
+		{
+			name: "local-port",
+			args: []string{"list", "-p", "70000"},
+			want: "invalid --local-port 70000",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCommand(io.Discard, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+				t.Fatal("kube factory should not be called")
+				return nil, nil
+			})
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestConnectParsesShortFlagsAfterTarget(t *testing.T) {
 	var out bytes.Buffer
 	fake := &fakeKube{
@@ -68,6 +112,54 @@ func TestEnvAliasStillConnects(t *testing.T) {
 	}
 	if fake.portForwardCalls != 1 {
 		t.Fatalf("portForwardCalls = %d", fake.portForwardCalls)
+	}
+}
+
+func TestListCommandPrintsTargets(t *testing.T) {
+	var out bytes.Buffer
+	fake := &fakeKube{
+		targets: []kpg.Target{
+			{Provider: kpg.ProviderCNPG, Namespace: "app", Cluster: "app-db", Database: "app", User: "app"},
+			{Provider: kpg.ProviderZalando, Namespace: "legacy", Cluster: "acid-main", Database: "app", User: "app_user"},
+		},
+	}
+	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+		return fake, nil
+	})
+	cmd.SetArgs([]string{"list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"TARGET", "PROVIDER", "app/app-db", "legacy/acid-main", "zalando"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("list output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestListCommandPrintsJSON(t *testing.T) {
+	var out bytes.Buffer
+	fake := &fakeKube{
+		targets: []kpg.Target{
+			{Provider: kpg.ProviderCNPG, Namespace: "app", Cluster: "app-db", Database: "app", User: "app"},
+		},
+	}
+	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+		if opts.Output != "json" || !opts.OutputExplicit {
+			t.Fatalf("unexpected opts: %#v", opts)
+		}
+		return fake, nil
+	})
+	cmd.SetArgs([]string{"list", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{`"target": "app/app-db"`, `"provider": "cnpg"`, `"database": "app"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("list json missing %q:\n%s", want, got)
+		}
 	}
 }
 

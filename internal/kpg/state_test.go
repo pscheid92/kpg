@@ -29,3 +29,45 @@ func TestLastTargetSerialization(t *testing.T) {
 		t.Fatalf("state file mode = %o", info.Mode().Perm())
 	}
 }
+
+func TestReadLastTargetRejectsInvalidState(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	path := filepath.Join(stateHome, "kpg", StateFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"namespace":"app"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadLastTarget(); err == nil {
+		t.Fatal("expected invalid state error")
+	}
+}
+
+func TestStatePathUsesXDGStateHome(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	got, err := StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(stateHome, "kpg", StateFileName)
+	if got != want {
+		t.Fatalf("StatePath = %q, want %q", got, want)
+	}
+}
+
+func TestStatePathUsesHomeFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", home)
+	got, err := StatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".local", "state", "kpg", StateFileName)
+	if got != want {
+		t.Fatalf("StatePath = %q, want %q", got, want)
+	}
+}

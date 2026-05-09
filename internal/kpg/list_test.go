@@ -83,3 +83,35 @@ func TestListJSON(t *testing.T) {
 		t.Fatalf("got %#v want %#v", got[0], want)
 	}
 }
+
+func TestRenderTargetListEmpty(t *testing.T) {
+	var out bytes.Buffer
+	if err := RenderTargetList(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected empty output, got %q", out.String())
+	}
+}
+
+func TestShouldShowProviderForSameTargetAcrossProviders(t *testing.T) {
+	targets := []ListTarget{
+		{Target: "app/app-db", Provider: ProviderCNPG},
+		{Target: "app/app-db", Provider: ProviderZalando},
+	}
+	if !ShouldShowProvider(targets) {
+		t.Fatal("expected provider column for duplicate targets across providers")
+	}
+}
+
+func TestRenderTargetListWithoutProviderColumn(t *testing.T) {
+	var out bytes.Buffer
+	err := RenderTargetList(&out, []ListTarget{{Target: "app/app-db"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "PROVIDER") || !strings.Contains(got, "app/app-db") || !strings.Contains(got, "-") {
+		t.Fatalf("unexpected list output:\n%s", got)
+	}
+}
