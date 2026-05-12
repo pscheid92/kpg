@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +60,46 @@ func TestResolveServicePodUsesZalandoRWServiceName(t *testing.T) {
 	}
 }
 
+func TestResolveServicePodFallsBackToEndpointSlicesForSelectorlessService(t *testing.T) {
+	ready := true
+	c := fakeClient(nil, []runtime.Object{
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "acid-main", Namespace: "legacy"},
+			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
+		},
+		&discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "acid-main-xyz",
+				Namespace: "legacy",
+				Labels:    map[string]string{discoveryv1.LabelServiceName: "acid-main"},
+			},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Endpoints: []discoveryv1.Endpoint{{
+				Addresses:  []string{"10.0.0.1"},
+				Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+				TargetRef:  &corev1.ObjectReference{Kind: "Pod", Name: "acid-main-0", Namespace: "legacy"},
+			}},
+		},
+		pod("legacy", "acid-main-0", map[string]string{"cluster-name": "acid-main", "spilo-role": "master"}, corev1.PodRunning, true),
+	})
+
+	got, remotePort, err := c.resolveServicePod(context.Background(), kpg.Target{
+		Provider:    kpg.ProviderZalando,
+		Namespace:   "legacy",
+		Cluster:     "acid-main",
+		ServiceName: "acid-main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "acid-main-0" {
+		t.Fatalf("selected pod %q", got.Name)
+	}
+	if remotePort != 5432 {
+		t.Fatalf("remote port = %d", remotePort)
+	}
+}
+
 func TestResolveServicePodErrors(t *testing.T) {
 	t.Run("missing service", func(t *testing.T) {
 		c := fakeClient(nil, nil)
@@ -68,13 +109,16 @@ func TestResolveServicePodErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("service without selector", func(t *testing.T) {
+	t.Run("selectorless service with no endpoints", func(t *testing.T) {
 		c := fakeClient(nil, []runtime.Object{
-			&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app-db-rw", Namespace: "app"}},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-db-rw", Namespace: "app"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
+			},
 		})
 		_, _, err := c.resolveServicePod(context.Background(), kpg.Target{Namespace: "app", Cluster: "app-db"})
-		if err == nil || !strings.Contains(err.Error(), "has no selector") {
-			t.Fatalf("expected selector error, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "no selector and no endpoints") {
+			t.Fatalf("expected missing-endpoints error, got %v", err)
 		}
 	})
 

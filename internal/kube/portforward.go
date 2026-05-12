@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -76,20 +78,82 @@ func (c *Client) resolveServicePod(ctx context.Context, t kpg.Target) (*corev1.P
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(service.Spec.Selector) == 0 {
-		return nil, 0, fmt.Errorf("service %s/%s has no selector", t.Namespace, serviceName)
-	}
 	remotePort, err := serviceRemotePort(service)
 	if err != nil {
 		return nil, 0, err
 	}
-	selector := labels.SelectorFromSet(service.Spec.Selector).String()
-	pods, err := c.core.CoreV1().Pods(t.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	pods, err := c.podsForService(ctx, t.Namespace, service)
 	if err != nil {
 		return nil, 0, err
 	}
-	candidates := make([]corev1.Pod, 0, len(pods.Items))
-	for _, pod := range pods.Items {
+	pod, err := pickPodForPortForward(pods, t.Namespace, serviceName)
+	if err != nil {
+		return nil, 0, err
+	}
+	return pod, remotePort, nil
+}
+
+func (c *Client) podsForService(ctx context.Context, namespace string, service *corev1.Service) ([]corev1.Pod, error) {
+	if len(service.Spec.Selector) > 0 {
+		selector := labels.SelectorFromSet(service.Spec.Selector).String()
+		list, err := c.core.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return nil, err
+		}
+		return list.Items, nil
+	}
+	return c.podsFromEndpointSlices(ctx, namespace, service.Name)
+}
+
+func (c *Client) podsFromEndpointSlices(ctx context.Context, namespace, serviceName string) ([]corev1.Pod, error) {
+	slices, err := c.core.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: discoveryv1.LabelServiceName + "=" + serviceName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(slices.Items) == 0 {
+		return nil, fmt.Errorf("service %s/%s has no selector and no endpoints", namespace, serviceName)
+	}
+	names := endpointSlicePodNames(slices.Items)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("service %s/%s has no endpoints with pod targets", namespace, serviceName)
+	}
+	pods := make([]corev1.Pod, 0, len(names))
+	for _, name := range names {
+		pod, err := c.core.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		pods = append(pods, *pod)
+	}
+	return pods, nil
+}
+
+func endpointSlicePodNames(slices []discoveryv1.EndpointSlice) []string {
+	var names []string
+	seen := map[string]struct{}{}
+	for _, slice := range slices {
+		for _, endpoint := range slice.Endpoints {
+			if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" || endpoint.TargetRef.Name == "" {
+				continue
+			}
+			if _, ok := seen[endpoint.TargetRef.Name]; ok {
+				continue
+			}
+			seen[endpoint.TargetRef.Name] = struct{}{}
+			names = append(names, endpoint.TargetRef.Name)
+		}
+	}
+	return names
+}
+
+func pickPodForPortForward(pods []corev1.Pod, namespace, serviceName string) (*corev1.Pod, error) {
+	candidates := make([]corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
 		if pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp == nil {
 			candidates = append(candidates, pod)
 		}
@@ -99,13 +163,13 @@ func (c *Client) resolveServicePod(ctx context.Context, t kpg.Target) (*corev1.P
 	})
 	for i := range candidates {
 		if podReady(&candidates[i]) {
-			return &candidates[i], remotePort, nil
+			return &candidates[i], nil
 		}
 	}
 	if len(candidates) > 0 {
-		return &candidates[0], remotePort, nil
+		return &candidates[0], nil
 	}
-	return nil, 0, fmt.Errorf("service %s/%s has no running pods", t.Namespace, serviceName)
+	return nil, fmt.Errorf("service %s/%s has no running pods", namespace, serviceName)
 }
 
 func serviceRemotePort(service *corev1.Service) (int32, error) {
