@@ -10,36 +10,36 @@ import (
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
-func (c *Client) ListClusterUsers(ctx context.Context, t kpg.Target) ([]string, error) {
-	if t.Provider != kpg.ProviderZalando {
-		return nil, nil
+func (c *Client) EnrichTarget(ctx context.Context, t kpg.Target) (kpg.Target, error) {
+	provider := c.providerFor(t.Provider)
+	if provider == nil {
+		return t, nil
 	}
-	secrets, err := c.core.CoreV1().Secrets(t.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "application=spilo,cluster-name=" + t.Cluster,
-	})
-	if err != nil {
-		if apierrors.IsForbidden(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	seen := map[string]struct{}{}
-	var users []string
-	for _, secret := range secrets.Items {
-		username := string(secret.Data["username"])
-		if username == "" {
-			continue
-		}
-		if _, ok := seen[username]; ok {
-			continue
-		}
-		seen[username] = struct{}{}
-		users = append(users, username)
-	}
-	return users, nil
+	return provider.enrichTarget(ctx, c, t)
 }
 
-func (c *Client) ReadCredentials(ctx context.Context, opts kpg.Options, t kpg.Target) (kpg.AppSecret, bool, error) {
+func (c *Client) ResolveConnection(ctx context.Context, opts kpg.Options, t kpg.Target) (kpg.Target, kpg.AppSecret, error) {
+	provider := c.providerFor(t.Provider)
+	if provider == nil {
+		return resolveConnectionWith(ctx, c, opts, t, kpg.ApplyConnectionOverrides)
+	}
+	return provider.resolveConnection(ctx, c, opts, t)
+}
+
+func resolveConnectionWith(ctx context.Context, c *Client, opts kpg.Options, t kpg.Target, apply func(kpg.Target, kpg.Options) kpg.Target) (kpg.Target, kpg.AppSecret, error) {
+	t = apply(t, opts)
+	secret, found, err := c.readCredentials(ctx, t)
+	if err != nil {
+		return kpg.Target{}, kpg.AppSecret{}, err
+	}
+	if found {
+		t = kpg.ApplySecret(t, secret)
+		t = apply(t, opts)
+	}
+	return t, secret, nil
+}
+
+func (c *Client) readCredentials(ctx context.Context, t kpg.Target) (kpg.AppSecret, bool, error) {
 	secretNamespace := firstNonEmpty(t.SecretNamespace, t.Namespace)
 	secretName := t.SecretName
 	if secretName == "" {

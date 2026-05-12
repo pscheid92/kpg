@@ -1,14 +1,19 @@
 package kube
 
 import (
+	"context"
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/pscheid92/kpg/internal/kpg"
 )
+
+type zalandoProvider struct{}
 
 var zalandoPostgresqlGVR = schema.GroupVersionResource{
 	Group:    "acid.zalan.do",
@@ -16,7 +21,15 @@ var zalandoPostgresqlGVR = schema.GroupVersionResource{
 	Resource: "postgresqls",
 }
 
-func (c *Client) targetsFromZalandoList(list unstructured.UnstructuredList) []kpg.Target {
+func (zalandoProvider) name() string {
+	return kpg.ProviderZalando
+}
+
+func (zalandoProvider) gvr() schema.GroupVersionResource {
+	return zalandoPostgresqlGVR
+}
+
+func (zalandoProvider) targets(list unstructured.UnstructuredList) []kpg.Target {
 	targets := make([]kpg.Target, 0, len(list.Items))
 	for _, item := range list.Items {
 		name := item.GetName()
@@ -25,25 +38,58 @@ func (c *Client) targetsFromZalandoList(list unstructured.UnstructuredList) []kp
 			continue
 		}
 		database, user := zalandoDatabaseAndUser(item)
-		secretNamespace, secretUser := kpg.SplitCrossNamespaceUser(user)
-		if secretNamespace == "" {
-			secretNamespace = ns
-		}
 		t := kpg.Target{
 			Provider:        kpg.ProviderZalando,
 			Namespace:       ns,
 			Cluster:         name,
 			Database:        database,
-			User:            secretUser,
 			ServiceName:     name,
-			SecretName:      zalandoSecretName(secretUser, name),
-			SecretNamespace: secretNamespace,
 			DatabaseOptions: zalandoDatabaseOptions(item),
 			UserOptions:     zalandoUserOptions(item),
+			DatabaseOwners:  zalandoDatabaseOwners(item),
 		}
+		t = zalandoApplyUser(t, user)
 		targets = append(targets, t)
 	}
 	return targets
+}
+
+func (p zalandoProvider) enrichTarget(ctx context.Context, c *Client, t kpg.Target) (kpg.Target, error) {
+	secrets, err := c.core.CoreV1().Secrets(t.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "application=spilo,cluster-name=" + t.Cluster,
+	})
+	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return t, nil
+		}
+		return t, err
+	}
+	var users []string
+	for _, secret := range secrets.Items {
+		username := string(secret.Data["username"])
+		if username != "" {
+			users = append(users, username)
+		}
+	}
+	t.UserOptions = zalandoMergeUserOptions(t.UserOptions, users)
+	return t, nil
+}
+
+func (p zalandoProvider) resolveConnection(ctx context.Context, c *Client, opts kpg.Options, t kpg.Target) (kpg.Target, kpg.AppSecret, error) {
+	return resolveConnectionWith(ctx, c, opts, t, p.applyConnectionOptions)
+}
+
+func (zalandoProvider) applyConnectionOptions(t kpg.Target, opts kpg.Options) kpg.Target {
+	if opts.Database != "" {
+		t.Database = opts.Database
+		if opts.User == "" {
+			t = zalandoApplyUser(t, t.DatabaseOwners[opts.Database])
+		}
+	}
+	if opts.User != "" {
+		t = zalandoApplyUser(t, opts.User)
+	}
+	return t
 }
 
 func zalandoDatabaseOptions(item unstructured.Unstructured) []string {
@@ -84,7 +130,7 @@ func zalandoUserOptions(item unstructured.Unstructured) []string {
 			return
 		}
 		seen[name] = struct{}{}
-		if kpg.IsCrossNamespaceUser(name) {
+		if zalandoIsCrossNamespaceUser(name) {
 			cross = append(cross, name)
 		} else {
 			local = append(local, name)
@@ -105,12 +151,26 @@ func zalandoUserOptions(item unstructured.Unstructured) []string {
 	return append(local, cross...)
 }
 
+func zalandoDatabaseOwners(item unstructured.Unstructured) map[string]string {
+	databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases")
+	if !found || len(databases) == 0 {
+		return nil
+	}
+	owners := make(map[string]string, len(databases))
+	for database, owner := range databases {
+		if database != "" && owner != "" {
+			owners[database] = owner
+		}
+	}
+	return owners
+}
+
 func zalandoDatabaseAndUser(item unstructured.Unstructured) (string, string) {
 	databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases")
 	if found && len(databases) > 0 {
 		var local, crossNamespace []string
 		for name, owner := range databases {
-			if kpg.IsCrossNamespaceUser(owner) {
+			if zalandoIsCrossNamespaceUser(owner) {
 				crossNamespace = append(crossNamespace, name)
 				continue
 			}
@@ -172,4 +232,59 @@ func zalandoSecretName(user string, cluster string) string {
 		return ""
 	}
 	return strings.ReplaceAll(user, "_", "-") + "." + cluster + ".credentials.postgresql.acid.zalan.do"
+}
+
+func zalandoApplyUser(t kpg.Target, user string) kpg.Target {
+	if user == "" {
+		return t
+	}
+	secretNamespace, secretUser := zalandoSplitCrossNamespaceUser(user)
+	if secretNamespace == "" {
+		secretNamespace = t.Namespace
+	}
+	t.User = secretUser
+	t.SecretName = zalandoSecretName(secretUser, t.Cluster)
+	t.SecretNamespace = secretNamespace
+	return t
+}
+
+func zalandoMergeUserOptions(a, b []string) []string {
+	seen := map[string]struct{}{}
+	var local, cross []string
+	add := func(user string) {
+		if user == "" {
+			return
+		}
+		if _, ok := seen[user]; ok {
+			return
+		}
+		seen[user] = struct{}{}
+		if zalandoIsCrossNamespaceUser(user) {
+			cross = append(cross, user)
+			return
+		}
+		local = append(local, user)
+	}
+	for _, user := range a {
+		add(user)
+	}
+	for _, user := range b {
+		add(user)
+	}
+	sort.Strings(local)
+	sort.Strings(cross)
+	return append(local, cross...)
+}
+
+func zalandoSplitCrossNamespaceUser(user string) (string, string) {
+	namespace, name, found := strings.Cut(user, ".")
+	if found && namespace != "" && name != "" {
+		return namespace, name
+	}
+	return "", user
+}
+
+func zalandoIsCrossNamespaceUser(user string) bool {
+	namespace, _ := zalandoSplitCrossNamespaceUser(user)
+	return namespace != ""
 }

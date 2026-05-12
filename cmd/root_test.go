@@ -356,6 +356,32 @@ func TestLastRunsCommandAfterDash(t *testing.T) {
 	}
 }
 
+func TestLastAcceptsUserAndDatabaseOverrides(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	if err := kpg.WriteLastTarget(kpg.LastTarget{Namespace: "app", Cluster: "app-db"}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	fake := &fakeKube{
+		targets: []kpg.Target{{Namespace: "app", Cluster: "app-db", User: "app", Database: "app"}},
+	}
+	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+		return fake, nil
+	})
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"last", "-u", "reporting", "-d", "reports", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{`"PGUSER": "reporting"`, `"PGDATABASE": "reports"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("last output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestLastRejectsArgsWithoutDash(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
@@ -439,12 +465,13 @@ func (f *fakeKube) ListTargets(_ context.Context, opts kpg.Options) ([]kpg.Targe
 	return targets, nil
 }
 
-func (f *fakeKube) ListClusterUsers(context.Context, kpg.Target) ([]string, error) {
-	return nil, nil
+func (f *fakeKube) EnrichTarget(_ context.Context, t kpg.Target) (kpg.Target, error) {
+	return t, nil
 }
 
-func (f *fakeKube) ReadCredentials(context.Context, kpg.Options, kpg.Target) (kpg.AppSecret, bool, error) {
-	return kpg.AppSecret{}, false, nil
+func (f *fakeKube) ResolveConnection(_ context.Context, opts kpg.Options, t kpg.Target) (kpg.Target, kpg.AppSecret, error) {
+	t = kpg.ApplyConnectionOverrides(t, opts)
+	return t, kpg.AppSecret{}, nil
 }
 
 func (f *fakeKube) PortForward(ctx context.Context, _ kpg.Options, _ kpg.Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {

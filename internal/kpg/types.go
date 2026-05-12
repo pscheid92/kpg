@@ -43,6 +43,7 @@ type Target struct {
 	SecretNamespace string
 	DatabaseOptions []string
 	UserOptions     []string
+	DatabaseOwners  map[string]string
 }
 
 type ListTarget struct {
@@ -90,7 +91,7 @@ type LastTarget struct {
 
 type Kube interface {
 	ListTargets(ctx context.Context, opts Options) ([]Target, error)
-	ListClusterUsers(ctx context.Context, t Target) ([]string, error)
-	ReadCredentials(ctx context.Context, opts Options, t Target) (AppSecret, bool, error)
+	EnrichTarget(ctx context.Context, t Target) (Target, error)
+	ResolveConnection(ctx context.Context, opts Options, t Target) (Target, AppSecret, error)
 	PortForward(ctx context.Context, opts Options, t Target, localPort int, out io.Writer, errOut io.Writer, readyCh chan struct{}) error
 }

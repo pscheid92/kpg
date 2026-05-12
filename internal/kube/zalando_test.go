@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/pscheid92/kpg/internal/kpg"
 )
 
 func TestZalandoDatabaseAndUserPrefersLocalOwner(t *testing.T) {
@@ -62,11 +60,11 @@ func TestNestedStringSliceMap(t *testing.T) {
 }
 
 func TestZalandoSecretHelpers(t *testing.T) {
-	namespace, user := kpg.SplitCrossNamespaceUser("appspace.db_user")
+	namespace, user := zalandoSplitCrossNamespaceUser("appspace.db_user")
 	if namespace != "appspace" || user != "db_user" {
 		t.Fatalf("cross namespace user = %q %q", namespace, user)
 	}
-	namespace, user = kpg.SplitCrossNamespaceUser("db_user")
+	namespace, user = zalandoSplitCrossNamespaceUser("db_user")
 	if namespace != "" || user != "db_user" {
 		t.Fatalf("local user = %q %q", namespace, user)
 	}

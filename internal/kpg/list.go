@@ -15,9 +15,9 @@ func List(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, op
 	SortTargets(targets)
 	listTargets := make([]ListTarget, 0, len(targets))
 	for _, t := range targets {
-		secret, found, err := kube.ReadCredentials(ctx, opts, t)
-		if err == nil && found {
-			t = ApplySecret(t, secret)
+		resolved, _, err := kube.ResolveConnection(ctx, opts, t)
+		if err == nil {
+			t = resolved
 		}
 		listTargets = append(listTargets, NewListTarget(t))
 	}

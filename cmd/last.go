@@ -9,7 +9,7 @@ import (
 )
 
 func (a *app) lastCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "last [-- command [args...]]",
 		Short: "Reconnect to the last successful target",
 		Long: `Reconnect to the last successful target without storing discovery data or secrets.
@@ -38,6 +38,9 @@ environment values and exits when the command exits.`,
 			return kpg.Connect(commandContext(cmd), a.stdout, a.stderr, k, a.opts, targetText, clientArgs, true)
 		},
 	}
+	cmd.Flags().StringVarP(&a.opts.User, "user", "u", "", "override the Postgres user")
+	cmd.Flags().StringVarP(&a.opts.Database, "database", "d", "", "override the Postgres database")
+	return cmd
 }
 
 func lastClientArgs(cmd *cobra.Command, args []string) ([]string, error) {

@@ -184,7 +184,7 @@ func TestListTargetsReturnsPartialWhenOneProviderForbidden(t *testing.T) {
 	}
 }
 
-func TestReadCredentialsOverrideAndMissingSecret(t *testing.T) {
+func TestResolveConnectionReadsCredentialsAndHandlesMissingSecret(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "app-db-app", Namespace: "app"},
@@ -203,26 +203,26 @@ func TestReadCredentialsOverrideAndMissingSecret(t *testing.T) {
 		},
 	})
 
-	secret, found, err := c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{Namespace: "app", Cluster: "app-db"})
+	target, secret, err := c.ResolveConnection(context.Background(), kpg.Options{}, kpg.Target{Namespace: "app", Cluster: "app-db"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !found {
-		t.Fatal("expected secret to be found")
 	}
 	if secret.Username != "appuser" || secret.Password != "secret" || secret.Database != "appdb" {
 		t.Fatalf("unexpected secret: %#v", secret)
 	}
+	if target.User != "appuser" || target.Database != "appdb" {
+		t.Fatalf("unexpected target: %#v", target)
+	}
 
-	_, found, err = c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{Namespace: "app", Cluster: "missing-db"})
+	_, secret, err = c.ResolveConnection(context.Background(), kpg.Options{}, kpg.Target{Namespace: "app", Cluster: "missing-db"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found {
-		t.Fatal("missing app secret should not be found")
+	if secret != (kpg.AppSecret{}) {
+		t.Fatalf("missing app secret should be empty, got %#v", secret)
 	}
 
-	secret, found, err = c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{
+	target, secret, err = c.ResolveConnection(context.Background(), kpg.Options{}, kpg.Target{
 		Provider:        kpg.ProviderZalando,
 		Namespace:       "legacy",
 		Cluster:         "acid-main",
@@ -234,11 +234,11 @@ func TestReadCredentialsOverrideAndMissingSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("expected zalando secret to be found")
-	}
 	if secret.Username != "app_user" || secret.Password != "zalando-secret" || secret.Database != "app" {
 		t.Fatalf("unexpected zalando secret: %#v", secret)
+	}
+	if target.User != "app_user" || target.Database != "app" {
+		t.Fatalf("unexpected zalando target: %#v", target)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestDecodeLegacySecretValue(t *testing.T) {
 	}
 }
 
-func TestReadCredentialsFallsBackToTargetMetadata(t *testing.T) {
+func TestResolveConnectionFallsBackToTargetMetadata(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "app-db-app", Namespace: "app"},
@@ -298,7 +298,7 @@ func TestReadCredentialsFallsBackToTargetMetadata(t *testing.T) {
 		},
 	})
 
-	secret, found, err := c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{
+	target, secret, err := c.ResolveConnection(context.Background(), kpg.Options{}, kpg.Target{
 		Namespace: "app",
 		Cluster:   "app-db",
 		User:      "target-user",
@@ -307,14 +307,14 @@ func TestReadCredentialsFallsBackToTargetMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("expected secret")
-	}
 	if secret.Username != "target-user" || secret.Database != "target-db" || secret.Password != "secret" {
 		t.Fatalf("unexpected fallback secret: %#v", secret)
 	}
+	if target.User != "target-user" || target.Database != "target-db" {
+		t.Fatalf("unexpected fallback target: %#v", target)
+	}
 
-	secret, found, err = c.ReadCredentials(context.Background(), kpg.Options{}, kpg.Target{
+	target, secret, err = c.ResolveConnection(context.Background(), kpg.Options{}, kpg.Target{
 		Namespace:  "app",
 		Cluster:    "ignored",
 		SecretName: "legacy-db-app",
@@ -322,10 +322,92 @@ func TestReadCredentialsFallsBackToTargetMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("expected legacy database secret")
-	}
 	if secret.Username != "legacy" || secret.Database != "legacydb" {
 		t.Fatalf("unexpected legacy database secret: %#v", secret)
+	}
+	if target.User != "legacy" || target.Database != "legacydb" {
+		t.Fatalf("unexpected legacy target: %#v", target)
+	}
+}
+
+func TestResolveConnectionRecomputesZalandoSecretForUserOverride(t *testing.T) {
+	c := fakeClient(nil, []runtime.Object{
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy"},
+			Data: map[string][]byte{
+				"username": []byte("reporting_user"),
+				"password": []byte("rpw"),
+			},
+		},
+	})
+
+	target, secret, err := c.ResolveConnection(context.Background(), kpg.Options{
+		User:     "reporting_user",
+		Database: "reports",
+	}, kpg.Target{
+		Provider:        kpg.ProviderZalando,
+		Namespace:       "legacy",
+		Cluster:         "acid-main",
+		Database:        "app",
+		User:            "default_owner",
+		SecretName:      "default-owner.acid-main.credentials.postgresql.acid.zalan.do",
+		SecretNamespace: "legacy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.User != "reporting_user" || target.Database != "reports" || secret.Password != "rpw" {
+		t.Fatalf("unexpected resolved connection: target=%#v secret=%#v", target, secret)
+	}
+}
+
+func TestResolveConnectionUsesZalandoDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
+	c := fakeClient(nil, []runtime.Object{
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy"},
+			Data: map[string][]byte{
+				"username": []byte("reporting_user"),
+				"password": []byte("rpw"),
+			},
+		},
+	})
+
+	target, secret, err := c.ResolveConnection(context.Background(), kpg.Options{Database: "reports"}, kpg.Target{
+		Provider:       kpg.ProviderZalando,
+		Namespace:      "legacy",
+		Cluster:        "acid-main",
+		Database:       "app",
+		User:           "default_owner",
+		DatabaseOwners: map[string]string{"reports": "reporting_user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.User != "reporting_user" || target.Database != "reports" || secret.Password != "rpw" {
+		t.Fatalf("unexpected resolved connection: target=%#v secret=%#v", target, secret)
+	}
+}
+
+func TestResolveConnectionNormalizesZalandoCrossNamespaceUser(t *testing.T) {
+	c := fakeClient(nil, []runtime.Object{
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "db-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "appspace"},
+			Data: map[string][]byte{
+				"username": []byte("db_user"),
+				"password": []byte("crosspw"),
+			},
+		},
+	})
+
+	target, secret, err := c.ResolveConnection(context.Background(), kpg.Options{User: "appspace.db_user"}, kpg.Target{
+		Provider:  kpg.ProviderZalando,
+		Namespace: "legacy",
+		Cluster:   "acid-main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.User != "db_user" || target.SecretNamespace != "appspace" || target.SecretName != "db-user.acid-main.credentials.postgresql.acid.zalan.do" || secret.Password != "crosspw" {
+		t.Fatalf("unexpected cross-namespace connection: target=%#v secret=%#v", target, secret)
 	}
 }

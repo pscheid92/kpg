@@ -25,11 +25,6 @@ type Client struct {
 	defaultNamespace string
 }
 
-type provider struct {
-	gvr     schema.GroupVersionResource
-	targets func(unstructured.UnstructuredList) []kpg.Target
-}
-
 func New(opts kpg.Options) (*Client, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: opts.Context}
@@ -58,14 +53,10 @@ func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Targe
 	if namespace == "" {
 		namespace = metav1.NamespaceAll
 	}
-	providers := []provider{
-		{gvr: cnpgClusterGVR, targets: c.targetsFromCNPGList},
-		{gvr: zalandoPostgresqlGVR, targets: c.targetsFromZalandoList},
-	}
 	var targets []kpg.Target
 	var forbidden []forbiddenAttempt
-	for _, provider := range providers {
-		installed, err := c.resourceInstalled(provider.gvr)
+	for _, provider := range registeredProviders() {
+		installed, err := c.resourceInstalled(provider.gvr())
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +74,7 @@ func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Targe
 				continue
 			}
 			if apierrors.IsForbidden(err) {
-				forbidden = append(forbidden, forbiddenAttempt{gvr: provider.gvr, namespace: attempted})
+				forbidden = append(forbidden, forbiddenAttempt{gvr: provider.gvr(), namespace: attempted})
 				continue
 			}
 			return nil, err
@@ -98,8 +89,8 @@ func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Targe
 	return targets, nil
 }
 
-func (c *Client) listProvider(ctx context.Context, provider provider, namespace string) (*unstructured.UnstructuredList, error) {
-	return c.dynamic.Resource(provider.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+func (c *Client) listProvider(ctx context.Context, provider postgresProvider, namespace string) (*unstructured.UnstructuredList, error) {
+	return c.dynamic.Resource(provider.gvr()).Namespace(namespace).List(ctx, metav1.ListOptions{})
 }
 
 func (c *Client) resourceInstalled(gvr schema.GroupVersionResource) (bool, error) {

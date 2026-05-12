@@ -78,33 +78,6 @@ func ApplyConnectionOverrides(t Target, opts Options) Target {
 	}
 	if opts.User != "" {
 		t.User = opts.User
-		t.SecretName, t.SecretNamespace = providerSecretLocation(t)
 	}
 	return t
-}
-
-func providerSecretLocation(t Target) (string, string) {
-	switch t.Provider {
-	case ProviderZalando:
-		namespace, user := SplitCrossNamespaceUser(t.User)
-		if namespace == "" {
-			namespace = t.Namespace
-		}
-		return strings.ReplaceAll(user, "_", "-") + "." + t.Cluster + ".credentials.postgresql.acid.zalan.do", namespace
-	default:
-		return t.Cluster + "-" + t.User, t.Namespace
-	}
-}
-
-func SplitCrossNamespaceUser(user string) (string, string) {
-	namespace, name, found := strings.Cut(user, ".")
-	if found && namespace != "" && name != "" {
-		return namespace, name
-	}
-	return "", user
-}
-
-func IsCrossNamespaceUser(user string) bool {
-	namespace, _ := SplitCrossNamespaceUser(user)
-	return namespace != ""
 }

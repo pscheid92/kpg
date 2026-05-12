@@ -175,27 +175,19 @@ func TestConnectNoTargetPickerStartsShell(t *testing.T) {
 	}
 }
 
-func TestConnectUserFlagOverridesAndRecomputesZalandoSecret(t *testing.T) {
+func TestConnectUserAndDatabaseFlagsOverrideTargetValues(t *testing.T) {
 	k := &fakeKube{
 		targets: []Target{
 			{
-				Provider:        ProviderZalando,
-				Namespace:       "legacy",
-				Cluster:         "acid-main",
-				Database:        "app",
-				User:            "default_owner",
-				ServiceName:     "acid-main",
-				SecretName:      "default_owner.acid-main.credentials.postgresql.acid.zalan.do",
-				SecretNamespace: "legacy",
-				DatabaseOptions: []string{"app", "reports"},
-				UserOptions:     []string{"default_owner", "reporting_user"},
+				Provider:  ProviderZalando,
+				Namespace: "legacy",
+				Cluster:   "acid-main",
+				Database:  "app",
+				User:      "default_owner",
 			},
 		},
-		secretsByName: map[string]AppSecret{
-			"reporting-user.acid-main.credentials.postgresql.acid.zalan.do": {
-				Username: "reporting_user",
-				Password: "rpw",
-			},
+		secrets: map[string]AppSecret{
+			"legacy/acid-main": {Password: "rpw"},
 		},
 	}
 	var out bytes.Buffer
@@ -209,6 +201,42 @@ func TestConnectUserFlagOverridesAndRecomputesZalandoSecret(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "export PGUSER=reporting_user\n") || !strings.Contains(out.String(), "export PGDATABASE=reports\n") || !strings.Contains(out.String(), "export PGPASSWORD=rpw\n") {
 		t.Fatalf("unexpected env:\n%s", out.String())
+	}
+}
+
+func TestConnectUsesSelectedDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{
+			{
+				Provider:        ProviderZalando,
+				Namespace:       "legacy",
+				Cluster:         "acid-main",
+				Database:        "app",
+				User:            "default_owner",
+				DatabaseOptions: []string{"app", "reports"},
+				UserOptions:     []string{"default_owner", "reporting_user"},
+				DatabaseOwners:  map[string]string{"reports": "reporting_user"},
+			},
+		},
+	}
+	var prompt bytes.Buffer
+	var out bytes.Buffer
+	opts := Options{
+		OutputExplicit: true,
+		Selection: Selection{
+			Enabled: true,
+			In:      strings.NewReader("2\n"),
+			Out:     &prompt,
+		},
+	}
+	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+		t.Fatalf("Connect error = %v", err)
+	}
+	if !strings.Contains(prompt.String(), "Select database:") || strings.Contains(prompt.String(), "Select user:") {
+		t.Fatalf("unexpected prompts:\n%s", prompt.String())
+	}
+	if !strings.Contains(out.String(), "export PGUSER=reporting_user\n") || !strings.Contains(out.String(), "export PGDATABASE=reports\n") {
+		t.Fatalf("database owner not applied:\n%s", out.String())
 	}
 }
 

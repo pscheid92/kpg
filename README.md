@@ -19,7 +19,9 @@ kpg connect <cluster|namespace/cluster|substring>
 kpg connect <provider>:<namespace>/<cluster>
 kpg connect <cluster|namespace/cluster|substring> -- psql
 kpg connect <cluster|namespace/cluster|substring> --output shell
+kpg connect <cluster|namespace/cluster|substring> --user <user> --database <db>
 kpg last
+kpg last --user <user> --database <db>
 kpg last -- psql
 kpg version
 kpg completion <bash|zsh|fish|powershell>
@@ -105,6 +107,14 @@ kpg connect app-db --output dotenv
 kpg connect app-db --output json
 ```
 
+Use `--user` and `--database` to override the defaults discovered from the
+operator resource and generated credentials:
+
+```sh
+kpg connect app-db --user reporting_user --database reports
+kpg last --user reporting_user --database reports
+```
+
 Targets can be written as a cluster name, `namespace/cluster`, or a unique substring match. If multiple providers expose the same namespace and cluster, use a provider-qualified target:
 
 ```sh
@@ -126,10 +136,13 @@ Only the namespace and cluster are stored. Discovery data and secrets are not ca
 
 V1 supports CloudNativePG and Zalando Postgres Operator.
 
-By default, discovery tries to list supported resources across namespaces. If
-Kubernetes denies an all-namespace provider list, `kpg` retries that provider in
-the current kube context namespace. Use `--namespace <name>` to make discovery
-strictly namespaced, or pass a namespace-qualified target such as `app/app-db`.
+`kpg` uses Kubernetes API discovery to detect which supported provider
+resources are registered, then lists only those resources. It does not list
+`CustomResourceDefinition` objects. By default, discovery tries to list
+supported resources across namespaces. If Kubernetes denies an all-namespace
+provider list, `kpg` retries that provider in the current kube context
+namespace. Use `--namespace <name>` to make discovery strictly namespaced, or
+pass a namespace-qualified target such as `app/app-db`.
 
 CloudNativePG:
 
@@ -159,7 +172,7 @@ RW service: <cluster>
 User secret: <username>.<cluster>.credentials.postgresql.acid.zalan.do
 ```
 
-The first database in `spec.databases`, sorted by name, is used as the default database. Its owner is used as the default user. If there are no databases, the first user in `spec.users`, sorted by name, is used. Cross-namespace user notation like `appspace.db_user` is supported for the documented default secret naming convention.
+The first database in `spec.databases`, sorted by name, is used as the default database. Its owner is used as the default user. If `spec.databases` is empty, the first prepared database in `spec.preparedDatabases`, sorted by name, is used. If no database is available, the first user in `spec.users`, sorted by name, is used. Cross-namespace user notation like `appspace.db_user` is supported for the documented default secret naming convention. When `--database` selects a database with a known owner and `--user` is not set, that owner is used as the default user.
 
 ## Development
 
