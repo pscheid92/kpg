@@ -175,6 +175,81 @@ func TestConnectNoTargetPickerStartsShell(t *testing.T) {
 	}
 }
 
+func TestConnectUserFlagOverridesAndRecomputesZalandoSecret(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{
+			{
+				Provider:        ProviderZalando,
+				Namespace:       "legacy",
+				Cluster:         "acid-main",
+				Database:        "app",
+				User:            "default_owner",
+				ServiceName:     "acid-main",
+				SecretName:      "default_owner.acid-main.credentials.postgresql.acid.zalan.do",
+				SecretNamespace: "legacy",
+				DatabaseOptions: []string{"app", "reports"},
+				UserOptions:     []string{"default_owner", "reporting_user"},
+			},
+		},
+		secretsByName: map[string]AppSecret{
+			"reporting-user.acid-main.credentials.postgresql.acid.zalan.do": {
+				Username: "reporting_user",
+				Password: "rpw",
+			},
+		},
+	}
+	var out bytes.Buffer
+	opts := Options{
+		User:           "reporting_user",
+		Database:       "reports",
+		OutputExplicit: true,
+	}
+	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+		t.Fatalf("Connect error = %v", err)
+	}
+	if !strings.Contains(out.String(), "export PGUSER=reporting_user\n") || !strings.Contains(out.String(), "export PGDATABASE=reports\n") || !strings.Contains(out.String(), "export PGPASSWORD=rpw\n") {
+		t.Fatalf("unexpected env:\n%s", out.String())
+	}
+}
+
+func TestConnectPromptsForAmbiguousUserAndDatabase(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{
+			{
+				Provider:        ProviderZalando,
+				Namespace:       "legacy",
+				Cluster:         "acid-main",
+				Database:        "app",
+				User:            "default_owner",
+				ServiceName:     "acid-main",
+				SecretName:      "default_owner.acid-main.credentials.postgresql.acid.zalan.do",
+				SecretNamespace: "legacy",
+				DatabaseOptions: []string{"app", "reports"},
+				UserOptions:     []string{"default_owner", "reporting_user"},
+			},
+		},
+	}
+	var prompt bytes.Buffer
+	var out bytes.Buffer
+	opts := Options{
+		OutputExplicit: true,
+		Selection: Selection{
+			Enabled: true,
+			In:      strings.NewReader("2\n2\n"),
+			Out:     &prompt,
+		},
+	}
+	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+		t.Fatalf("Connect error = %v", err)
+	}
+	if !strings.Contains(prompt.String(), "Select database:") || !strings.Contains(prompt.String(), "Select user:") {
+		t.Fatalf("missing prompts:\n%s", prompt.String())
+	}
+	if !strings.Contains(out.String(), "export PGUSER=reporting_user\n") || !strings.Contains(out.String(), "export PGDATABASE=reports\n") {
+		t.Fatalf("interactive picks not applied:\n%s", out.String())
+	}
+}
+
 func TestResolveShellFallback(t *testing.T) {
 	t.Setenv("SHELL", "")
 	got, err := resolveShell()

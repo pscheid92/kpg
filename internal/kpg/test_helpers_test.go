@@ -8,6 +8,8 @@ import (
 type fakeKube struct {
 	targets          []Target
 	secrets          map[string]AppSecret
+	secretsByName    map[string]AppSecret
+	clusterUsers     map[string][]string
 	portForwardCalls int
 	listOptions      []Options
 }
@@ -17,7 +19,19 @@ func (f *fakeKube) ListTargets(_ context.Context, opts Options) ([]Target, error
 	return append([]Target(nil), f.targets...), nil
 }
 
+func (f *fakeKube) ListClusterUsers(_ context.Context, t Target) ([]string, error) {
+	if f.clusterUsers == nil {
+		return nil, nil
+	}
+	return append([]string(nil), f.clusterUsers[t.ID()]...), nil
+}
+
 func (f *fakeKube) ReadCredentials(_ context.Context, _ Options, t Target) (AppSecret, bool, error) {
+	if f.secretsByName != nil {
+		if secret, ok := f.secretsByName[t.SecretName]; ok {
+			return secret, true, nil
+		}
+	}
 	secret, ok := f.secrets[t.ID()]
 	return secret, ok, nil
 }

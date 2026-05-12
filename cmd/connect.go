@@ -10,7 +10,7 @@ import (
 )
 
 func (a *app) connectCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "connect [cluster|namespace/cluster|substring] [-- command [args...]]",
 		Aliases: []string{"env"},
 		Short:   "Connect to a Postgres target",
@@ -32,7 +32,8 @@ environment values into that command, and stops the tunnel when it exits.`,
   kpg connect app -o dotenv
   kpg connect app -o json
   kpg connect app-db -- psql
-  kpg connect app-db -- pgcli`,
+  kpg connect app-db -- pgcli
+  kpg connect app-db -u app_owner -d app_db`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a.opts.OutputExplicit = cmd.Root().PersistentFlags().Changed("output")
@@ -51,6 +52,9 @@ environment values into that command, and stops the tunnel when it exits.`,
 		},
 		ValidArgsFunction: a.completeConnectTargets,
 	}
+	cmd.Flags().StringVarP(&a.opts.User, "user", "u", "", "override the Postgres user")
+	cmd.Flags().StringVarP(&a.opts.Database, "database", "d", "", "override the Postgres database")
+	return cmd
 }
 
 func splitConnectArgs(cmd *cobra.Command, args []string) (string, []string, error) {

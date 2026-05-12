@@ -439,6 +439,10 @@ func (f *fakeKube) ListTargets(_ context.Context, opts kpg.Options) ([]kpg.Targe
 	return targets, nil
 }
 
+func (f *fakeKube) ListClusterUsers(context.Context, kpg.Target) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeKube) ReadCredentials(context.Context, kpg.Options, kpg.Target) (kpg.AppSecret, bool, error) {
 	return kpg.AppSecret{}, false, nil
 }

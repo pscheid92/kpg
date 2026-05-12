@@ -17,6 +17,8 @@ const (
 type Options struct {
 	Context        string
 	Namespace      string
+	User           string
+	Database       string
 	LocalPort      int
 	Output         string
 	OutputExplicit bool
@@ -39,6 +41,8 @@ type Target struct {
 	ServiceName     string
 	SecretName      string
 	SecretNamespace string
+	DatabaseOptions []string
+	UserOptions     []string
 }
 
 type ListTarget struct {
@@ -86,6 +90,7 @@ type LastTarget struct {
 
 type Kube interface {
 	ListTargets(ctx context.Context, opts Options) ([]Target, error)
+	ListClusterUsers(ctx context.Context, t Target) ([]string, error)
 	ReadCredentials(ctx context.Context, opts Options, t Target) (AppSecret, bool, error)
 	PortForward(ctx context.Context, opts Options, t Target, localPort int, out io.Writer, errOut io.Writer, readyCh chan struct{}) error
 }

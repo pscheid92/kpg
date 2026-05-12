@@ -70,7 +70,7 @@ func TestListTargetsSkipsInvalidObjectsAndZalandoFallbacks(t *testing.T) {
 		t.Fatalf("target ids = %#v, want %#v", got, want)
 	}
 	cross := targets[0]
-	if cross.User != "appspace.db_user" || cross.SecretNamespace != "appspace" || cross.SecretName != "db_user.acid-cross.credentials.postgresql.acid.zalan.do" {
+	if cross.User != "db_user" || cross.SecretNamespace != "appspace" || cross.SecretName != "db-user.acid-cross.credentials.postgresql.acid.zalan.do" {
 		t.Fatalf("cross namespace secret fields missing: %#v", cross)
 	}
 	users := targets[1]

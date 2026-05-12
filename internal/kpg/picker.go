@@ -9,6 +9,55 @@ import (
 	"strings"
 )
 
+func PickFromList(in io.Reader, out io.Writer, label string, options []string) (string, error) {
+	if len(options) == 0 {
+		return "", fmt.Errorf("no %s to choose from", label)
+	}
+	if len(options) == 1 {
+		return options[0], nil
+	}
+	if err := writef(out, "Select %s:\n\n", label); err != nil {
+		return "", err
+	}
+	for i, opt := range options {
+		if err := writef(out, "  %-2d %s\n", i+1, opt); err != nil {
+			return "", err
+		}
+	}
+	if err := writef(out, "\n%s [1-%d]: ", label, len(options)); err != nil {
+		return "", err
+	}
+	line, err := readUnbufferedLine(in)
+	if err != nil {
+		return "", err
+	}
+	choice, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || choice < 1 || choice > len(options) {
+		return "", fmt.Errorf("invalid %s selection", label)
+	}
+	return options[choice-1], nil
+}
+
+func readUnbufferedLine(in io.Reader) (string, error) {
+	var b strings.Builder
+	one := make([]byte, 1)
+	for {
+		n, err := in.Read(one)
+		if n > 0 {
+			if one[0] == '\n' {
+				return b.String(), nil
+			}
+			b.WriteByte(one[0])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return b.String(), nil
+			}
+			return "", err
+		}
+	}
+}
+
 func PickTarget(in io.Reader, out io.Writer, targets []Target) (Target, error) {
 	if len(targets) == 0 {
 		return Target{}, errors.New("no targets found")

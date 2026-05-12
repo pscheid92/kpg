@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -46,12 +47,22 @@ func prepareConnection(ctx context.Context, kube Kube, opts Options, targetText 
 		return Target{}, AppSecret{}, 0, err
 	}
 
+	if extra, err := kube.ListClusterUsers(ctx, t); err == nil && len(extra) > 0 {
+		t.UserOptions = mergeUserOptions(t.UserOptions, extra)
+	}
+
+	if err := disambiguateConnectionChoices(&opts, t); err != nil {
+		return Target{}, AppSecret{}, 0, err
+	}
+	t = ApplyConnectionOverrides(t, opts)
+
 	secret, found, err := kube.ReadCredentials(ctx, opts, t)
 	if err != nil {
 		return Target{}, AppSecret{}, 0, fmt.Errorf("secret lookup failed: %w", err)
 	}
 	if found {
 		t = ApplySecret(t, secret)
+		t = ApplyConnectionOverrides(t, opts)
 	}
 
 	localPort := opts.LocalPort
@@ -84,6 +95,57 @@ func resolveConnectTarget(ctx context.Context, kube Kube, opts Options, targetTe
 		return PickTargetInteractive(opts.Selection.In, opts.Selection.Out, targets)
 	}
 	return PickTarget(opts.Selection.In, opts.Selection.Out, targets)
+}
+
+func mergeUserOptions(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	var local, cross []string
+	for _, list := range [][]string{a, b} {
+		for _, item := range list {
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			if IsCrossNamespaceUser(item) {
+				cross = append(cross, item)
+			} else {
+				local = append(local, item)
+			}
+		}
+	}
+	sort.Strings(local)
+	sort.Strings(cross)
+	return append(local, cross...)
+}
+
+func disambiguateConnectionChoices(opts *Options, t Target) error {
+	if !opts.Selection.Enabled {
+		return nil
+	}
+	pick := func(label string, options []string) (string, error) {
+		if opts.Selection.Interactive {
+			return PickFromListInteractive(opts.Selection.In, opts.Selection.Out, label, options)
+		}
+		return PickFromList(opts.Selection.In, opts.Selection.Out, label, options)
+	}
+	if opts.Database == "" && len(t.DatabaseOptions) > 1 {
+		choice, err := pick("database", t.DatabaseOptions)
+		if err != nil {
+			return err
+		}
+		opts.Database = choice
+	}
+	if opts.User == "" && len(t.UserOptions) > 1 {
+		choice, err := pick("user", t.UserOptions)
+		if err != nil {
+			return err
+		}
+		opts.User = choice
+	}
+	return nil
 }
 
 func explicitTargetNamespace(input string) string {

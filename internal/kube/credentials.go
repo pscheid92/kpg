@@ -10,6 +10,35 @@ import (
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
+func (c *Client) ListClusterUsers(ctx context.Context, t kpg.Target) ([]string, error) {
+	if t.Provider != kpg.ProviderZalando {
+		return nil, nil
+	}
+	secrets, err := c.core.CoreV1().Secrets(t.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "application=spilo,cluster-name=" + t.Cluster,
+	})
+	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var users []string
+	for _, secret := range secrets.Items {
+		username := string(secret.Data["username"])
+		if username == "" {
+			continue
+		}
+		if _, ok := seen[username]; ok {
+			continue
+		}
+		seen[username] = struct{}{}
+		users = append(users, username)
+	}
+	return users, nil
+}
+
 func (c *Client) ReadCredentials(ctx context.Context, opts kpg.Options, t kpg.Target) (kpg.AppSecret, bool, error) {
 	secretNamespace := firstNonEmpty(t.SecretNamespace, t.Namespace)
 	secretName := t.SecretName

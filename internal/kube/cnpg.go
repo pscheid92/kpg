@@ -31,9 +31,11 @@ func (c *Client) targetsFromCNPGList(list unstructured.UnstructuredList) []kpg.T
 		}
 		if database, found, _ := unstructured.NestedString(item.Object, "spec", "bootstrap", "initdb", "database"); found {
 			t.Database = database
+			t.DatabaseOptions = []string{database}
 		}
 		if owner, found, _ := unstructured.NestedString(item.Object, "spec", "bootstrap", "initdb", "owner"); found {
 			t.User = owner
+			t.UserOptions = []string{owner}
 		}
 		targets = append(targets, t)
 	}

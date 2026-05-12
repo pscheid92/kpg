@@ -25,7 +25,7 @@ func (c *Client) targetsFromZalandoList(list unstructured.UnstructuredList) []kp
 			continue
 		}
 		database, user := zalandoDatabaseAndUser(item)
-		secretNamespace, secretUser := zalandoSecretUser(user)
+		secretNamespace, secretUser := kpg.SplitCrossNamespaceUser(user)
 		if secretNamespace == "" {
 			secretNamespace = ns
 		}
@@ -34,26 +34,103 @@ func (c *Client) targetsFromZalandoList(list unstructured.UnstructuredList) []kp
 			Namespace:       ns,
 			Cluster:         name,
 			Database:        database,
-			User:            user,
+			User:            secretUser,
 			ServiceName:     name,
 			SecretName:      zalandoSecretName(secretUser, name),
 			SecretNamespace: secretNamespace,
+			DatabaseOptions: zalandoDatabaseOptions(item),
+			UserOptions:     zalandoUserOptions(item),
 		}
 		targets = append(targets, t)
 	}
 	return targets
 }
 
+func zalandoDatabaseOptions(item unstructured.Unstructured) []string {
+	seen := map[string]struct{}{}
+	var names []string
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases"); found {
+		for name := range databases {
+			add(name)
+		}
+	}
+	if prepared, found, _ := unstructured.NestedMap(item.Object, "spec", "preparedDatabases"); found {
+		for name := range prepared {
+			add(name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func zalandoUserOptions(item unstructured.Unstructured) []string {
+	seen := map[string]struct{}{}
+	var local, cross []string
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		if kpg.IsCrossNamespaceUser(name) {
+			cross = append(cross, name)
+		} else {
+			local = append(local, name)
+		}
+	}
+	if users, found := nestedStringSliceMap(item.Object, "spec", "users"); found {
+		for name := range users {
+			add(name)
+		}
+	}
+	if databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases"); found {
+		for _, owner := range databases {
+			add(owner)
+		}
+	}
+	sort.Strings(local)
+	sort.Strings(cross)
+	return append(local, cross...)
+}
+
 func zalandoDatabaseAndUser(item unstructured.Unstructured) (string, string) {
 	databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases")
 	if found && len(databases) > 0 {
-		names := make([]string, 0, len(databases))
-		for name := range databases {
-			names = append(names, name)
+		var local, crossNamespace []string
+		for name, owner := range databases {
+			if kpg.IsCrossNamespaceUser(owner) {
+				crossNamespace = append(crossNamespace, name)
+				continue
+			}
+			local = append(local, name)
+		}
+		names := local
+		if len(names) == 0 {
+			names = crossNamespace
 		}
 		sort.Strings(names)
 		database := names[0]
 		return database, databases[database]
+	}
+	if prepared, found, _ := unstructured.NestedMap(item.Object, "spec", "preparedDatabases"); found && len(prepared) > 0 {
+		names := make([]string, 0, len(prepared))
+		for name := range prepared {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return names[0], ""
 	}
 	users, found := nestedStringSliceMap(item.Object, "spec", "users")
 	if found && len(users) > 0 {
@@ -90,17 +167,9 @@ func nestedStringSliceMap(obj map[string]any, fields ...string) (map[string][]st
 	return result, true
 }
 
-func zalandoSecretUser(user string) (string, string) {
-	namespace, name, found := strings.Cut(user, ".")
-	if found && namespace != "" && name != "" {
-		return namespace, name
-	}
-	return "", user
-}
-
 func zalandoSecretName(user string, cluster string) string {
 	if user == "" {
 		return ""
 	}
-	return user + "." + cluster + ".credentials.postgresql.acid.zalan.do"
+	return strings.ReplaceAll(user, "_", "-") + "." + cluster + ".credentials.postgresql.acid.zalan.do"
 }
