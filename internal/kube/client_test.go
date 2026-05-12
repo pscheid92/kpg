@@ -2,12 +2,16 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/pscheid92/kpg/internal/kpg"
@@ -87,6 +91,32 @@ func TestListTargetsNamespaceRestriction(t *testing.T) {
 	}
 	if len(targets) != 1 || targets[0].ID() != "app/app-db" {
 		t.Fatalf("unexpected targets: %#v", targets)
+	}
+}
+
+func TestListTargetsRetriesDefaultNamespaceWhenAllNamespacesForbidden(t *testing.T) {
+	c := fakeClient(
+		[]runtime.Object{
+			cnpgCluster("app", "app-db", "app", "app"),
+			cnpgCluster("billing", "billing-db", "billing", "billing"),
+		},
+		nil,
+	)
+	c.defaultNamespace = "app"
+	c.dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "clusters", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction, ok := action.(k8stesting.ListAction)
+		if !ok || listAction.GetNamespace() != metav1.NamespaceAll {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(cnpgClusterGVR.GroupResource(), "", errors.New("cannot list all namespaces"))
+	})
+
+	targets, err := c.ListTargets(context.Background(), kpg.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := targetIDs(targets), []string{"app/app-db"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("target ids = %#v, want %#v", got, want)
 	}
 }
 

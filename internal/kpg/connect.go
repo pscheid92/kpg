@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -66,6 +67,9 @@ func prepareConnection(ctx context.Context, kube Kube, opts Options, targetText 
 }
 
 func resolveConnectTarget(ctx context.Context, kube Kube, opts Options, targetText string) (Target, error) {
+	if opts.Namespace == "" {
+		opts.Namespace = explicitTargetNamespace(targetText)
+	}
 	targets, err := kube.ListTargets(ctx, opts)
 	if err != nil {
 		return Target{}, fmt.Errorf("discovery failed: %w", err)
@@ -80,6 +84,15 @@ func resolveConnectTarget(ctx context.Context, kube Kube, opts Options, targetTe
 		return PickTargetInteractive(opts.Selection.In, opts.Selection.Out, targets)
 	}
 	return PickTarget(opts.Selection.In, opts.Selection.Out, targets)
+}
+
+func explicitTargetNamespace(input string) string {
+	_, targetText := splitProviderPrefix(strings.TrimSpace(input))
+	namespace, cluster, found := strings.Cut(targetText, "/")
+	if !found || namespace == "" || cluster == "" {
+		return ""
+	}
+	return namespace
 }
 
 func connectRender(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, opts Options, t Target, values EnvValues, storeLast bool) error {

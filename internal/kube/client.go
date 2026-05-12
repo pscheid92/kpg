@@ -17,9 +17,10 @@ import (
 )
 
 type Client struct {
-	restConfig *rest.Config
-	dynamic    dynamic.Interface
-	core       kubernetes.Interface
+	restConfig       *rest.Config
+	dynamic          dynamic.Interface
+	core             kubernetes.Interface
+	defaultNamespace string
 }
 
 type provider struct {
@@ -30,7 +31,12 @@ type provider struct {
 func New(opts kpg.Options) (*Client, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: opts.Context}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
+	config, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	namespace, _, err := clientConfig.Namespace()
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +48,7 @@ func New(opts kpg.Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{restConfig: config, dynamic: dyn, core: core}, nil
+	return &Client{restConfig: config, dynamic: dyn, core: core, defaultNamespace: namespace}, nil
 }
 
 func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Target, error) {
@@ -56,7 +62,10 @@ func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Targe
 	}
 	var targets []kpg.Target
 	for _, provider := range providers {
-		list, err := c.dynamic.Resource(provider.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+		list, err := c.listProvider(ctx, provider, namespace)
+		if shouldRetryInDefaultNamespace(err, opts.Namespace, namespace, c.defaultNamespace) {
+			list, err = c.listProvider(ctx, provider, c.defaultNamespace)
+		}
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -68,6 +77,18 @@ func (c *Client) ListTargets(ctx context.Context, opts kpg.Options) ([]kpg.Targe
 		}
 	}
 	return targets, nil
+}
+
+func (c *Client) listProvider(ctx context.Context, provider provider, namespace string) (*unstructured.UnstructuredList, error) {
+	return c.dynamic.Resource(provider.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+}
+
+func shouldRetryInDefaultNamespace(err error, requestedNamespace string, listedNamespace string, defaultNamespace string) bool {
+	return err != nil &&
+		requestedNamespace == "" &&
+		listedNamespace == metav1.NamespaceAll &&
+		defaultNamespace != "" &&
+		apierrors.IsForbidden(err)
 }
 
 func (c *Client) ListNamespaces(ctx context.Context) ([]string, error) {

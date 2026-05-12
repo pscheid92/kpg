@@ -126,6 +126,11 @@ Only the namespace and cluster are stored. Discovery data and secrets are not ca
 
 V1 supports CloudNativePG and Zalando Postgres Operator.
 
+By default, discovery tries to list supported resources across namespaces. If
+Kubernetes denies an all-namespace provider list, `kpg` retries that provider in
+the current kube context namespace. Use `--namespace <name>` to make discovery
+strictly namespaced, or pass a namespace-qualified target such as `app/app-db`.
+
 CloudNativePG:
 
 ```text

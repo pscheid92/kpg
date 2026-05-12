@@ -52,6 +52,38 @@ func TestConnectNoTargetNonTTYShowsUsage(t *testing.T) {
 	}
 }
 
+func TestResolveConnectTargetRestrictsDiscoveryToExplicitTargetNamespace(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{
+			{Provider: ProviderCNPG, Namespace: "app", Cluster: "app-db"},
+			{Provider: ProviderCNPG, Namespace: "billing", Cluster: "billing-db"},
+		},
+	}
+	got, err := resolveConnectTarget(context.Background(), k, Options{}, "cnpg:app/app-db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID() != "app/app-db" {
+		t.Fatalf("target = %s", got.ID())
+	}
+	if len(k.listOptions) != 1 || k.listOptions[0].Namespace != "app" {
+		t.Fatalf("discovery namespace = %#v", k.listOptions)
+	}
+}
+
+func TestResolveConnectTargetKeepsNamespaceFlag(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{{Namespace: "app", Cluster: "app-db"}},
+	}
+	_, err := resolveConnectTarget(context.Background(), k, Options{Namespace: "override"}, "app/app-db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(k.listOptions) != 1 || k.listOptions[0].Namespace != "override" {
+		t.Fatalf("discovery namespace = %#v", k.listOptions)
+	}
+}
+
 func TestConnectNoTargetPickerSelectsTarget(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

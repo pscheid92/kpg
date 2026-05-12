@@ -9,9 +9,11 @@ type fakeKube struct {
 	targets          []Target
 	secrets          map[string]AppSecret
 	portForwardCalls int
+	listOptions      []Options
 }
 
-func (f *fakeKube) ListTargets(context.Context, Options) ([]Target, error) {
+func (f *fakeKube) ListTargets(_ context.Context, opts Options) ([]Target, error) {
+	f.listOptions = append(f.listOptions, opts)
 	return append([]Target(nil), f.targets...), nil
 }
 
