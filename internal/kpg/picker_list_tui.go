@@ -199,4 +199,3 @@ func (m *listPickerModel) deleteLastRune() {
 	m.query = string(runes[:len(runes)-1])
 	m.applyFilter()
 }
-

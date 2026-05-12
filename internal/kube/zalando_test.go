@@ -12,7 +12,7 @@ func TestZalandoDatabaseAndUserPrefersLocalOwner(t *testing.T) {
 	item := unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
 			"databases": map[string]any{
-				"app":                      "app_owner",
+				"app":                       "app_owner",
 				"dev-kafka.debezium_outbox": "dev-kafka.debezium_outbox",
 			},
 		},
