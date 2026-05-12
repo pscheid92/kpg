@@ -10,7 +10,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
@@ -116,6 +119,67 @@ func TestListTargetsRetriesDefaultNamespaceWhenAllNamespacesForbidden(t *testing
 		t.Fatal(err)
 	}
 	if got, want := targetIDs(targets), []string{"app/app-db"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("target ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestListTargetsSkipsUninstalledProvider(t *testing.T) {
+	c := fakeClient(
+		[]runtime.Object{
+			cnpgCluster("app", "app-db", "app", "app"),
+		},
+		nil,
+	)
+	// Re-register discovery with only CNPG; Zalando is not installed.
+	core := c.core.(*k8sfake.Clientset)
+	discovery := core.Discovery().(*fakediscovery.FakeDiscovery)
+	discovery.Resources = nil
+	registerInstalledResources(core, cnpgClusterGVR)
+
+	targets, err := c.ListTargets(context.Background(), kpg.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := targetIDs(targets), []string{"app/app-db"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("target ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestListTargetsReportsForbiddenWhenAllProvidersDenied(t *testing.T) {
+	c := fakeClient(nil, nil)
+	c.dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gr := schema.GroupResource{Group: action.GetResource().Group, Resource: action.GetResource().Resource}
+		return true, nil, apierrors.NewForbidden(gr, "", errors.New("denied"))
+	})
+
+	_, err := c.ListTargets(context.Background(), kpg.Options{Namespace: "locked"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	got := err.Error()
+	for _, want := range []string{"no permission", "clusters.postgresql.cnpg.io", "postgresqls.acid.zalan.do", `"locked"`, "-n <namespace>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error %q missing %q", got, want)
+		}
+	}
+}
+
+func TestListTargetsReturnsPartialWhenOneProviderForbidden(t *testing.T) {
+	c := fakeClient(
+		[]runtime.Object{
+			zalandoCluster("legacy", "acid-main", map[string]string{"app": "app_user"}, map[string][]string{"app_user": {}}),
+		},
+		nil,
+	)
+	c.dynamic.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "clusters", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(cnpgClusterGVR.GroupResource(), "", errors.New("denied"))
+	})
+
+	targets, err := c.ListTargets(context.Background(), kpg.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := targetIDs(targets), []string{"legacy/acid-main"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("target ids = %#v, want %#v", got, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
@@ -22,9 +23,28 @@ func fakeClient(clusterObjects []runtime.Object, coreObjects []runtime.Object) *
 		},
 		clusterObjects...,
 	)
+	core := k8sfake.NewSimpleClientset(coreObjects...)
+	registerInstalledResources(core, cnpgClusterGVR, zalandoPostgresqlGVR)
 	return &Client{
 		dynamic: dynamicClient,
-		core:    k8sfake.NewSimpleClientset(coreObjects...),
+		core:    core,
+	}
+}
+
+func registerInstalledResources(core *k8sfake.Clientset, gvrs ...schema.GroupVersionResource) {
+	discovery := core.Discovery().(*fakediscovery.FakeDiscovery)
+	byGV := map[string]*metav1.APIResourceList{}
+	for _, gvr := range gvrs {
+		key := gvr.GroupVersion().String()
+		list, ok := byGV[key]
+		if !ok {
+			list = &metav1.APIResourceList{GroupVersion: key}
+			byGV[key] = list
+		}
+		list.APIResources = append(list.APIResources, metav1.APIResource{Name: gvr.Resource, Namespaced: true})
+	}
+	for _, list := range byGV {
+		discovery.Resources = append(discovery.Resources, list)
 	}
 }
 
