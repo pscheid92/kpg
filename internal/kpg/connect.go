@@ -164,7 +164,7 @@ func connectShell(ctx context.Context, stdout io.Writer, stderr io.Writer, kube 
 func connectExec(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, opts Options, t Target, values EnvValues, clientArgs []string, storeLast bool) error {
 	_, _ = fmt.Fprintf(stderr, "port-forwarding %s/%s to 127.0.0.1:%d; press Ctrl-C to stop\n", t.Namespace, serviceName(t), values.Port)
 	runErr := withPortForward(ctx, stdout, stderr, kube, opts, t, values.Port, func(ctx context.Context) error {
-		return runClient(ctx, clientArgs, t, values, stdout, stderr)
+		return runChild(ctx, clientArgs, t, values, stdout, stderr)
 	})
 	storeLastTarget(stderr, t, storeLast && runErr == nil)
 	return runErr

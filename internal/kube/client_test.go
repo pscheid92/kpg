@@ -269,18 +269,6 @@ func TestContextNamesFromConfig(t *testing.T) {
 	}
 }
 
-func TestDecodeLegacySecretValue(t *testing.T) {
-	if got := DecodeLegacySecretValue(map[string]string{"dbname": "YXBwZGI="}, "dbname"); got != "appdb" {
-		t.Fatalf("decoded %q", got)
-	}
-	if got := DecodeLegacySecretValue(nil, "dbname"); got != "" {
-		t.Fatalf("nil map decoded %q", got)
-	}
-	if got := DecodeLegacySecretValue(map[string]string{"dbname": "not-base64"}, "dbname"); got != "" {
-		t.Fatalf("invalid base64 decoded %q", got)
-	}
-}
-
 func TestResolveConnectionFallsBackToTargetMetadata(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{

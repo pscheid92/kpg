@@ -2,7 +2,6 @@ package kube
 
 import (
 	"context"
-	"encoding/base64"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,18 +67,6 @@ func secretString(data map[string][]byte, key string) string {
 		return ""
 	}
 	return string(data[key])
-}
-
-func DecodeLegacySecretValue(data map[string]string, key string) string {
-	raw := data[key]
-	if raw == "" {
-		return ""
-	}
-	decoded, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return ""
-	}
-	return string(decoded)
 }
 
 func firstNonEmpty(values ...string) string {

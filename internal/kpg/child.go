@@ -40,10 +40,6 @@ func resolveShell() (string, error) {
 	return shell, nil
 }
 
-func runClient(ctx context.Context, args []string, t Target, values EnvValues, stdout io.Writer, stderr io.Writer) error {
-	return runChild(ctx, args, t, values, stdout, stderr)
-}
-
 func runChild(ctx context.Context, args []string, t Target, values EnvValues, stdout io.Writer, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdin = os.Stdin

@@ -41,7 +41,7 @@ Shared flags:
 
 Requirements:
 
-- Go 1.26 or newer
+- Go 1.27 or newer
 - A kubeconfig with access to the target cluster
 - CloudNativePG or Zalando Postgres Operator resources in the active context
 - `psql`, `pgcli`, or another Postgres client when using command mode
