@@ -90,17 +90,24 @@ homebrew_casks:
         url: git@github.com:pscheid92/homebrew-tap.git
         private_key: '{{ envOrDefault "HOMEBREW_TAP_DEPLOY_KEY" "" }}'
     commit_msg_template: "Update kpg to {{ .Version }}"
+    # Installs bash, zsh, fish and PowerShell completions; Homebrew runs
+    # `kpg completion <shell>` for each, Cobra's convention.
+    generate_completions_from_executable:
+      executable: kpg
+      shell_parameter_format: cobra
     # Without the deploy key the cask is only rendered into dist/, so local
     # snapshots and forks still release.
     skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_DEPLOY_KEY" "" }}false{{ else }}true{{ end }}'
     # The binaries are not notarized, so the quarantine flag Homebrew sets
-    # would make Gatekeeper block them. Homebrew 7 deprecates the postflight
-    # block GoReleaser's hooks generate in favour of postflight_steps, which
-    # GoReleaser cannot render yet, hence the custom block. GoReleaser applies
+    # would make Gatekeeper block them. The flag is cleared in preflight
+    # steps, which run right after the archive is unpacked: Homebrew runs the
+    # completion generator below before any postflight step, and it executes
+    # kpg. GoReleaser's hooks render the deprecated preflight/postflight blocks
+    # and cannot render steps yet, hence the custom block. GoReleaser applies
     # its templates to the whole cask, so Homebrew's {{staged_path}} token is
     # escaped.
     custom_block: |
-      postflight_steps do
+      preflight_steps do
         on_macos do
           run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/kpg"]
         end
