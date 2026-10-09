@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,23 +86,23 @@ func TestRootRejectsInvalidSharedFlags(t *testing.T) {
 }
 
 func TestConnectParsesShortFlagsAfterTarget(t *testing.T) {
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	fake := &fakeKube{
 		targets: []kpg.Target{{Namespace: "app", Cluster: "app-db"}},
 	}
-	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+	cmd := newRootCommand(out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
 		if opts.Context != "prod" || opts.Namespace != "app" || opts.LocalPort != 15432 || opts.Output != "json" || !opts.OutputExplicit {
 			t.Fatalf("unexpected opts: %#v", opts)
 		}
 		return fake, nil
 	})
-	cmd.SetContext(context.Background())
+	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{"connect", "app-db", "-c", "prod", "-n", "app", "-p", "15432", "-o", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if fake.portForwardCalls != 1 {
-		t.Fatalf("portForwardCalls = %d", fake.portForwardCalls)
+	if fake.calls() != 1 {
+		t.Fatalf("portForwardCalls = %d", fake.calls())
 	}
 	if !strings.Contains(out.String(), `"PGPORT": 15432`) {
 		t.Fatalf("unexpected output:\n%s", out.String())
@@ -109,20 +110,20 @@ func TestConnectParsesShortFlagsAfterTarget(t *testing.T) {
 }
 
 func TestEnvAliasStillConnects(t *testing.T) {
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	fake := &fakeKube{
 		targets: []kpg.Target{{Namespace: "app", Cluster: "app-db"}},
 	}
-	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+	cmd := newRootCommand(out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
 		return fake, nil
 	})
-	cmd.SetContext(context.Background())
+	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{"env", "app-db", "-p", "15432"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if fake.portForwardCalls != 1 {
-		t.Fatalf("portForwardCalls = %d", fake.portForwardCalls)
+	if fake.calls() != 1 {
+		t.Fatalf("portForwardCalls = %d", fake.calls())
 	}
 }
 
@@ -362,8 +363,8 @@ func TestLastRunsCommandAfterDash(t *testing.T) {
 	if out.String() != "last" {
 		t.Fatalf("stdout = %q", out.String())
 	}
-	if fake.portForwardCalls != 1 {
-		t.Fatalf("portForwardCalls = %d", fake.portForwardCalls)
+	if fake.calls() != 1 {
+		t.Fatalf("portForwardCalls = %d", fake.calls())
 	}
 }
 
@@ -373,14 +374,14 @@ func TestLastAcceptsUserAndDatabaseOverrides(t *testing.T) {
 	if err := kpg.WriteLastTarget(kpg.LastTarget{Namespace: "app", Cluster: "app-db"}); err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	fake := &fakeKube{
 		targets: []kpg.Target{{Namespace: "app", Cluster: "app-db", User: "app", Database: "app"}},
 	}
-	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+	cmd := newRootCommand(out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
 		return fake, nil
 	})
-	cmd.SetContext(context.Background())
+	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{"last", "-u", "reporting", "-d", "reports", "-o", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
@@ -473,7 +474,9 @@ func TestNamespaceFlagCompletionUsesSelectedContext(t *testing.T) {
 }
 
 type fakeKube struct {
-	targets          []kpg.Target
+	targets []kpg.Target
+
+	mu               sync.Mutex
 	portForwardCalls int
 }
 
@@ -497,12 +500,23 @@ func (f *fakeKube) ResolveConnection(_ context.Context, opts kpg.Options, t kpg.
 	return t, kpg.AppSecret{}, nil
 }
 
-func (f *fakeKube) PortForward(_ context.Context, _ kpg.Options, _ kpg.Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {
+func (f *fakeKube) ServicePod(_ context.Context, t kpg.Target) (string, bool, error) {
+	return t.Cluster + "-1", true, nil
+}
+
+func (f *fakeKube) PortForward(ctx context.Context, _ kpg.Options, _ kpg.Target, _ string, _ int, _ io.Writer, readyCh chan struct{}) error {
+	f.mu.Lock()
 	f.portForwardCalls++
-	if readyCh != nil {
-		close(readyCh)
-	}
-	return nil
+	f.mu.Unlock()
+	close(readyCh)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *fakeKube) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.portForwardCalls
 }
 
 func setBuildInfo(t *testing.T, version, commit, date string) func() {
@@ -541,4 +555,24 @@ func TestRequestTimeoutFlagReachesKubeFactory(t *testing.T) {
 			t.Fatalf("%v: %v", tc.args, err)
 		}
 	}
+}
+
+// renderedOutput ends the command's context once something was printed, so
+// --output mode, which serves the tunnel until Ctrl-C, returns in tests.
+type renderedOutput struct {
+	bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (r *renderedOutput) Write(p []byte) (int, error) {
+	n, err := r.Buffer.Write(p)
+	r.cancel()
+	return n, err
+}
+
+func untilRendered(t *testing.T) (context.Context, *renderedOutput) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return ctx, &renderedOutput{cancel: cancel}
 }

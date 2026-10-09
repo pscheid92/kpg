@@ -128,21 +128,31 @@ The program also receives `KPG_TARGET` (`namespace/cluster`) and
 removes `PGSERVICE`, `PGSERVICEFILE`, and `PGHOSTADDR` from the program's
 environment because libpq would let them override the tunnel.
 
-If the tunnel drops, for example because the primary moved to another pod
-during a failover, `kpg` re-establishes it on the same local port: once
-immediately, then with pauses of 1, 2, 4, and 8 seconds. Sessions that were
-open before the loss end with it. `psql` usually tries to reset before the
-tunnel is back and then gives up, so `kpg` prints the command that reconnects
-it, for example:
+`kpg` keeps the local port itself and follows the primary through a
+failover or switchover, for every client that connects to it, not only `psql`:
+
+- Connections that are already open stay on the pod they started on until
+  the server ends them. During a CloudNativePG failover that happens when the
+  old primary shuts down; an open session delays that by up to the cluster's
+  `smartShutdownTimeout`.
+- New connections always go to the pod that is currently the ready primary
+  behind the read-write service. When it changed, `kpg` opens a new
+  port-forward for them and says so on stderr.
+- While no primary is ready, new connections are held open for up to 60
+  seconds and connected as soon as one is. Clients see a slow connect instead
+  of an error, so their own reconnect logic succeeds: `psql` reports
+  `Attempting reset: Succeeded`, and applications and connection pools get a
+  working connection on their next attempt.
+
+A client with a connect timeout shorter than the failover, for example
+`PGCONNECT_TIMEOUT` or a JDBC `connectTimeout`, gives up before the primary
+is back and has to reconnect afterwards. If no primary becomes ready within
+60 seconds, `kpg` closes the waiting connection and prints a `psql` command to
+reconnect with once the cluster is healthy, for example:
 
 ```text
-port-forward to secretli/secretli-db re-established on 127.0.0.1:51664
-sessions opened before the loss must reconnect; in psql run: \c "host=127.0.0.1 port=51664 dbname=secretli user=secretli"
+reconnect once the cluster is healthy; in psql run: \c "host=127.0.0.1 port=51664 dbname=secretli user=secretli"
 ```
-
-An open session also delays a CloudNativePG failover by up to the cluster's
-`smartShutdownTimeout`, because the old primary waits for existing
-connections before it stops.
 
 `kpg` suppresses client-go's internal log lines so they do not interrupt an
 interactive session. Set `KPG_DEBUG=1` to see them.
