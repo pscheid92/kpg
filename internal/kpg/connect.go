@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -275,9 +276,15 @@ func tunnelCause(err error) error {
 
 const maxReconnectAttempts = 5
 
-// reconnectDelay is the pause before reconnect attempt n. Tests shorten it.
+// reconnectDelay is the pause before reconnect attempt n, counted from 1.
+// The first attempt is immediate because a client usually tries to
+// reconnect the moment its session ends; later attempts back off
+// exponentially (1s, 2s, 4s, 8s) to cover a failover. Tests shorten it.
 var reconnectDelay = func(attempt int) time.Duration {
-	return time.Duration(attempt) * time.Second
+	if attempt <= 1 {
+		return 0
+	}
+	return time.Second << (attempt - 2)
 }
 
 // forwardWithRetry keeps the tunnel up for the session. A tunnel that drops
@@ -290,7 +297,11 @@ func (s *tunnelSession) forwardWithRetry(ctx context.Context, readyCh chan struc
 	}
 	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
 		delay := reconnectDelay(attempt)
-		_, _ = fmt.Fprintf(s.status, "port-forward to %s lost: %v; reconnecting in %s (attempt %d of %d)\n", s.target.ID(), err, delay, attempt, maxReconnectAttempts)
+		when := "now"
+		if delay > 0 {
+			when = "in " + delay.String()
+		}
+		_, _ = fmt.Fprintf(s.status, "port-forward to %s lost: %v; reconnecting %s (attempt %d of %d)\n", s.target.ID(), err, when, attempt, maxReconnectAttempts)
 		if !sleepContext(ctx, delay) {
 			return ctx.Err()
 		}
@@ -317,7 +328,8 @@ func (s *tunnelSession) forwardAnnouncingReady(ctx context.Context) error {
 				return
 			}
 		}
-		_, _ = fmt.Fprintf(s.status, "port-forward to %s re-established\n", s.target.ID())
+		_, _ = fmt.Fprintf(s.status, "port-forward to %s re-established on 127.0.0.1:%d\n", s.target.ID(), s.values.Port)
+		_, _ = fmt.Fprintf(s.status, "sessions opened before the loss must reconnect; in psql run: %s\n", psqlReconnectCommand(s.values))
 	})
 	err := s.kube.PortForward(ctx, s.opts, s.target, s.values.Port, s.stdout, s.status, ready)
 	close(finished)
@@ -378,4 +390,34 @@ func secretNamespace(t Target) string {
 		return t.SecretNamespace
 	}
 	return t.Namespace
+}
+
+// psqlReconnectCommand returns the psql meta-command that reconnects a
+// session through the tunnel. It uses a connection string because psql
+// discards its previous connection settings after a failed reset, and a bare
+// \c or positional arguments would then fail. The password is left out; psql
+// still has PGPASSWORD in its environment.
+func psqlReconnectCommand(values EnvValues) string {
+	params := []string{
+		"host=" + conninfoQuote(values.Host),
+		"port=" + strconv.Itoa(values.Port),
+	}
+	if values.Database != "" {
+		params = append(params, "dbname="+conninfoQuote(values.Database))
+	}
+	if values.User != "" {
+		params = append(params, "user="+conninfoQuote(values.User))
+	}
+	conninfo := strings.Join(params, " ")
+	return `\c "` + strings.ReplaceAll(conninfo, `"`, `""`) + `"`
+}
+
+// conninfoQuote quotes a libpq connection string value when it is empty or
+// contains spaces, quotes, or backslashes.
+func conninfoQuote(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t'\\") {
+		return value
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value)
+	return "'" + escaped + "'"
 }

@@ -29,6 +29,7 @@ type Client struct {
 }
 
 func New(opts kpg.Options) (*Client, error) {
+	quietClientGo()
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: opts.Context}
 	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)

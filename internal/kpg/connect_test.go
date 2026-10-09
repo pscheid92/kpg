@@ -466,7 +466,7 @@ func TestConnectReconnectsWhenTunnelDrops(t *testing.T) {
 	if k.portForwardCalls != 2 {
 		t.Fatalf("portForwardCalls = %d, want 2", k.portForwardCalls)
 	}
-	for _, want := range []string{"lost: lost connection to pod", "reconnecting", "attempt 1 of 5", "re-established"} {
+	for _, want := range []string{"lost: lost connection to pod", "reconnecting now (attempt 1 of 5)", "re-established on 127.0.0.1:", `in psql run: \c "host=127.0.0.1 port=`} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Fatalf("stderr missing %q:\n%s", want, errOut.String())
 		}
@@ -563,5 +563,51 @@ func TestConnectRejectsOutputWithCommand(t *testing.T) {
 	}
 	if k.portForwardCalls != 0 {
 		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
+	}
+}
+
+func TestReconnectDelayStartsImmediatelyAndBacksOff(t *testing.T) {
+	want := []time.Duration{0, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	var total time.Duration
+	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
+		got := reconnectDelay(attempt)
+		if got != want[attempt-1] {
+			t.Fatalf("delay before attempt %d = %s, want %s", attempt, got, want[attempt-1])
+		}
+		total += got
+	}
+	if total != 15*time.Second {
+		t.Fatalf("total reconnect window = %s, want 15s", total)
+	}
+}
+
+func TestPsqlReconnectCommand(t *testing.T) {
+	cases := map[string]struct {
+		values EnvValues
+		want   string
+	}{
+		"plain": {
+			values: EnvValues{Host: "127.0.0.1", Port: 51664, User: "secretli", Database: "secretli", Password: "never-printed"},
+			want:   `\c "host=127.0.0.1 port=51664 dbname=secretli user=secretli"`,
+		},
+		"no user or database": {
+			values: EnvValues{Host: "127.0.0.1", Port: 5432},
+			want:   `\c "host=127.0.0.1 port=5432"`,
+		},
+		"values needing quotes": {
+			values: EnvValues{Host: "127.0.0.1", Port: 5432, User: `o'brien`, Database: `my "db" name`},
+			want:   `\c "host=127.0.0.1 port=5432 dbname='my ""db"" name' user='o\'brien'"`,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := psqlReconnectCommand(tc.values)
+			if got != tc.want {
+				t.Fatalf("got  %s\nwant %s", got, tc.want)
+			}
+			if strings.Contains(got, "never-printed") {
+				t.Fatal("the reconnect hint must not contain the password")
+			}
+		})
 	}
 }
