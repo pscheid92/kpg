@@ -67,7 +67,7 @@ func RenderEnv(w io.Writer, format string, values EnvValues) error {
 		values.SSLMode = values.sslMode()
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(values)
+		return enc.Encode(values) //nolint:gosec // printing PGPASSWORD is the purpose of --output json
 	default:
 		return fmt.Errorf("unsupported output format %q", format)
 	}
@@ -96,13 +96,20 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// DotenvQuote quotes a value for a .env file. Values with a dollar sign or a
+// backtick are wrapped in single quotes, which every dotenv dialect treats
+// literally, so that nothing is interpolated or executed when the file is
+// loaded.
 func DotenvQuote(s string) string {
 	if s == "" {
 		return `""`
 	}
-	if !strings.ContainsAny(s, " \t\r\n#'\"") {
+	if !strings.ContainsAny(s, " \t\r\n#'\"$`") {
 		return s
 	}
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`)
+	if strings.ContainsAny(s, "$`") && !strings.ContainsAny(s, "'\r\n") {
+		return "'" + s + "'"
+	}
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "$", `\$`)
 	return `"` + replacer.Replace(s) + `"`
 }

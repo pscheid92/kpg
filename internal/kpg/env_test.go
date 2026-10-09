@@ -90,6 +90,9 @@ func TestEnvQuoting(t *testing.T) {
 		"has\"quote": `"has\"quote"`,
 		"line1\n2":   `"line1\n2"`,
 		`c:\tmp`:     `c:\tmp`,
+		"pa$$word":   "'pa$$word'",
+		"`cmd`":      "'`cmd`'",
+		"it's $5":    `"it's \$5"`,
 	}
 	for input, want := range dotenvCases {
 		if got := DotenvQuote(input); got != want {

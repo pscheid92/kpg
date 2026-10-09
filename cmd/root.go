@@ -47,12 +47,8 @@ func newRootCommandWithCompleters(stdout io.Writer, stderr io.Writer, factory ku
 		contextLister:   contexts,
 		namespaceLister: namespaces,
 	}
-	interactive := isTerminal(os.Stdin) && isTerminal(stdout)
-	a.opts.Selection = kpg.Selection{
-		Enabled:     interactive,
-		Interactive: interactive,
-		In:          os.Stdin,
-		Out:         stdout,
+	if isTerminal(os.Stdin) && isTerminal(stdout) {
+		a.opts.Selection = kpg.Selection{Interactive: true, In: os.Stdin, Out: stdout}
 	}
 	root := &cobra.Command{
 		Use:           "kpg",

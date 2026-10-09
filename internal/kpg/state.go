@@ -40,7 +40,7 @@ func ReadLastTarget() (LastTarget, error) {
 	if err != nil {
 		return LastTarget{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // the path is derived from XDG_STATE_HOME, not from input
 	if err != nil {
 		return LastTarget{}, err
 	}

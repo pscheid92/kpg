@@ -6,12 +6,15 @@ import (
 )
 
 type fakeKube struct {
-	targets          []Target
-	secrets          map[string]AppSecret
-	secretsByName    map[string]AppSecret
-	clusterUsers     map[string][]string
-	portForwardCalls int
-	listOptions      []Options
+	targets       []Target
+	secrets       map[string]AppSecret
+	secretsByName map[string]AppSecret
+	clusterUsers  map[string][]string
+	listOptions   []Options
+	// portForwardScript gives each PortForward call its behaviour; calls past
+	// the end of the script become ready and then end cleanly.
+	portForwardScript []func(ready chan struct{}) error
+	portForwardCalls  int
 }
 
 func (f *fakeKube) ListTargets(_ context.Context, opts Options) ([]Target, error) {
@@ -62,12 +65,14 @@ func mergeStringOptions(a, b []string) []string {
 	return merged
 }
 
-func (f *fakeKube) PortForward(ctx context.Context, _ Options, _ Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {
+func (f *fakeKube) PortForward(_ context.Context, _ Options, _ Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {
+	call := f.portForwardCalls
 	f.portForwardCalls++
+	if call < len(f.portForwardScript) {
+		return f.portForwardScript[call](readyCh)
+	}
 	if readyCh != nil {
 		close(readyCh)
-		<-ctx.Done()
-		return ctx.Err()
 	}
 	return nil
 }

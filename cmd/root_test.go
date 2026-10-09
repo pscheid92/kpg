@@ -474,12 +474,10 @@ func (f *fakeKube) ResolveConnection(_ context.Context, opts kpg.Options, t kpg.
 	return t, kpg.AppSecret{}, nil
 }
 
-func (f *fakeKube) PortForward(ctx context.Context, _ kpg.Options, _ kpg.Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {
+func (f *fakeKube) PortForward(_ context.Context, _ kpg.Options, _ kpg.Target, _ int, _ io.Writer, _ io.Writer, readyCh chan struct{}) error {
 	f.portForwardCalls++
 	if readyCh != nil {
 		close(readyCh)
-		<-ctx.Done()
-		return ctx.Err()
 	}
 	return nil
 }
