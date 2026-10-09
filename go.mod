@@ -1,6 +1,6 @@
 module github.com/pscheid92/kpg
 
-go 1.27.0
+go 1.27
 
 require (
 	charm.land/bubbletea/v2 v2.1.0
