@@ -7,12 +7,46 @@ run:
 linters:
   enable:
     - bodyclose
+    - copyloopvar
+    - errname
     - errorlint
+    - gocritic
+    - gosec
+    - intrange
     - misspell
+    - modernize
     - nilerr
     - nilnesserr
+    - nolintlint
+    - perfsprint
+    - revive
+    - thelper
     - unconvert
+    - unparam
+    - usestdlibvars
     - wastedassign
+  settings:
+    gosec:
+      excludes:
+        # kpg exists to run the user's own shell or client command with the
+        # connection exported, so launching a variable command is the feature.
+        - G204
+    revive:
+      rules:
+        # Everything lives under internal/; the exported names structure the
+        # packages rather than form a public API.
+        - name: exported
+          disabled: true
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Test files hold fixture credentials, fixed helper arguments, and
+      # permissive temp files on purpose.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
 
 formatters:
   enable:

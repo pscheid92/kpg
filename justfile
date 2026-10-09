@@ -21,13 +21,38 @@ vet:
 lint:
     golangci-lint run ./...
 
+# Format all Go files in place.
+fmt:
+    gofmt -l -w .
+
+# Apply the Go toolchain's automated fixes and modernizers.
+fix:
+    go fix ./...
+
+# Fail when go fix would change something; used by check and CI.
+fix-check:
+    go fix -diff ./...
+
+# Scan dependencies for known vulnerabilities that the code actually reaches.
+vuln:
+    go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 race:
     go test -race ./...
 
 build:
     go build .
 
-check: test vet lint build
+# Compile for every release target without writing binaries.
+cross:
+    GOOS=linux GOARCH=amd64 go build ./...
+    GOOS=linux GOARCH=arm64 go build ./...
+    GOOS=darwin GOARCH=amd64 go build ./...
+    GOOS=darwin GOARCH=arm64 go build ./...
+    GOOS=windows GOARCH=amd64 go build ./...
+    GOOS=windows GOARCH=arm64 go build ./...
+
+check: test vet lint fix-check build
 
 release-check:
     goreleaser check
