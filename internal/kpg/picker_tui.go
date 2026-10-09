@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // errPickerUnavailable reports that the full-screen picker could not run, for
@@ -138,9 +138,12 @@ func (m pickerModel[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		m.query += msg.Content
+		m.applyFilter()
+	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "ctrl+c", "esc", "escape":
 			m.canceled = true
 			return m, tea.Quit
 		case "enter":
@@ -166,8 +169,8 @@ func (m pickerModel[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "backspace", "ctrl+h":
 			m.deleteLastRune()
 		default:
-			if len(msg.Runes) > 0 {
-				m.query += string(msg.Runes)
+			if msg.Text != "" {
+				m.query += msg.Text
 				m.applyFilter()
 			}
 		}
@@ -175,9 +178,13 @@ func (m pickerModel[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View draws the picker inline: title, filter line, optional table header,
+func (m pickerModel[T]) View() tea.View {
+	return tea.NewView(m.render())
+}
+
+// render draws the picker inline: title, filter line, optional table header,
 // the visible window of matching rows, and a help line.
-func (m pickerModel[T]) View() string {
+func (m pickerModel[T]) render() string {
 	var b strings.Builder
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
