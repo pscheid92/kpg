@@ -47,19 +47,15 @@ func newRootCommandWithCompleters(stdout io.Writer, stderr io.Writer, factory ku
 		contextLister:   contexts,
 		namespaceLister: namespaces,
 	}
-	interactive := isTerminal(os.Stdin) && isTerminal(stdout)
-	a.opts.Selection = kpg.Selection{
-		Enabled:     interactive,
-		Interactive: interactive,
-		In:          os.Stdin,
-		Out:         stdout,
+	if isTerminal(os.Stdin) && isTerminal(stdout) {
+		a.opts.Selection = kpg.Selection{Interactive: true, In: os.Stdin, Out: stdout}
 	}
 	root := &cobra.Command{
 		Use:           "kpg",
 		Short:         "Connect to Kubernetes-hosted Postgres databases",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       buildinfo.Version,
+		Version:       buildinfo.Current().Version,
 	}
 	root.SetVersionTemplate("kpg {{.Version}}\n")
 	root.SetOut(stdout)
@@ -68,6 +64,7 @@ func newRootCommandWithCompleters(stdout io.Writer, stderr io.Writer, factory ku
 	root.PersistentFlags().StringVarP(&a.opts.Namespace, "namespace", "n", "", "restrict discovery/lookup to one namespace")
 	root.PersistentFlags().IntVarP(&a.opts.LocalPort, "local-port", "p", 0, "use a fixed local port")
 	root.PersistentFlags().StringVarP(&a.opts.Output, "output", "o", kpg.DefaultOutput, "output format: shell, dotenv, or json")
+	root.PersistentFlags().DurationVar(&a.opts.RequestTimeout, "request-timeout", 0, "timeout for Kubernetes API requests, for example 30s; off by default so interactive credential plugins are not cut short (the port-forward is never limited)")
 	_ = root.RegisterFlagCompletionFunc("context", a.completeContexts)
 	_ = root.RegisterFlagCompletionFunc("namespace", a.completeNamespaces)
 
@@ -92,6 +89,9 @@ func (a *app) kube() (kpg.Kube, error) {
 	}
 	if a.opts.LocalPort < 0 || a.opts.LocalPort > 65535 {
 		return nil, fmt.Errorf("invalid --local-port %d", a.opts.LocalPort)
+	}
+	if a.opts.RequestTimeout < 0 {
+		return nil, fmt.Errorf("invalid --request-timeout %s: must not be negative", a.opts.RequestTimeout)
 	}
 	return a.kubeFactory(a.opts)
 }

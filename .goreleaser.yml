@@ -10,8 +10,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # Commit-based timestamps keep builds reproducible from the same tag.
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
-      - -s -w -X github.com/pscheid92/kpg/internal/buildinfo.Version={{ .Version }} -X github.com/pscheid92/kpg/internal/buildinfo.Commit={{ .Commit }} -X github.com/pscheid92/kpg/internal/buildinfo.Date={{ .Date }}
+      - -s -w -X github.com/pscheid92/kpg/internal/buildinfo.Version={{ .Version }} -X github.com/pscheid92/kpg/internal/buildinfo.Commit={{ .Commit }} -X github.com/pscheid92/kpg/internal/buildinfo.Date={{ .CommitDate }}
     goos:
       - darwin
       - linux
@@ -37,6 +39,9 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
 
 signs:
   - id: pqsign-archives
@@ -70,12 +75,46 @@ signs:
     stdin: "{{ .Env.PQSIGN_PASSWORD }}"
     output: true
 
+homebrew_casks:
+  - name: kpg
+    binaries:
+      - kpg
+    homepage: https://github.com/pscheid92/kpg
+    description: Command-first CLI for connecting to Kubernetes-hosted Postgres databases
+    repository:
+      owner: pscheid92
+      name: homebrew-tap
+      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+    # Publishing needs a token with write access to the tap repository; without
+    # one the cask is only rendered into dist/ so releases still succeed.
+    skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
+    hooks:
+      post:
+        # The binaries are not notarized, so clear the quarantine flag that
+        # Gatekeeper would otherwise use to block them.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kpg"]
+          end
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
+  use: git
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Other changes
+      order: 999
   filters:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^chore:"
+      - "^ci:"

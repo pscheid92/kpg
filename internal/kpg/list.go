@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 )
+
+// listResolveWorkers bounds how many credential secrets are read at once.
+const listResolveWorkers = 8
 
 func List(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, opts Options) error {
 	targets, err := kube.ListTargets(ctx, opts)
@@ -13,13 +17,9 @@ func List(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, op
 		return fmt.Errorf("list failed: %w", err)
 	}
 	SortTargets(targets)
-	listTargets := make([]ListTarget, 0, len(targets))
-	for _, t := range targets {
-		resolved, _, err := kube.ResolveConnection(ctx, opts, t)
-		if err == nil {
-			t = resolved
-		}
-		listTargets = append(listTargets, NewListTarget(t))
+	listTargets := resolveListTargets(ctx, kube, opts, targets)
+	if len(listTargets) == 0 {
+		_, _ = fmt.Fprintln(stderr, "no Postgres targets found"+listScope(opts))
 	}
 	if opts.Output == "json" {
 		enc := json.NewEncoder(stdout)
@@ -27,6 +27,36 @@ func List(ctx context.Context, stdout io.Writer, stderr io.Writer, kube Kube, op
 		return enc.Encode(listTargets)
 	}
 	return RenderTargetList(stdout, listTargets)
+}
+
+// resolveListTargets reads each target's credentials secret so the table shows
+// the effective database and user. Secrets are fetched concurrently; a target
+// whose secret cannot be read keeps the values from its spec.
+func resolveListTargets(ctx context.Context, kube Kube, opts Options, targets []Target) []ListTarget {
+	results := make([]ListTarget, len(targets))
+	limit := make(chan struct{}, listResolveWorkers)
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		limit <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-limit }()
+			if resolved, _, err := kube.ResolveConnection(ctx, opts, t); err == nil {
+				t = resolved
+			}
+			results[i] = NewListTarget(t)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+func listScope(opts Options) string {
+	if opts.Namespace != "" {
+		return fmt.Sprintf(" in namespace %q", opts.Namespace)
+	}
+	return "; check the kube context (-c) or restrict the namespace (-n)"
 }
 
 func NewListTarget(t Target) ListTarget {
@@ -50,7 +80,7 @@ func RenderTargetList(w io.Writer, targets []ListTarget) error {
 		return nil
 	}
 	showProvider := ShouldShowProvider(targets)
-	widths := targetListWidthsFor(targets, showProvider)
+	widths := targetListWidthsFor(targets)
 	if showProvider {
 		if err := writef(w, "%-*s  %-*s  %-*s  %s\n", widths.Target, "TARGET", widths.Provider, "PROVIDER", widths.Database, "DATABASE", "USER"); err != nil {
 			return err
@@ -91,27 +121,10 @@ func ShouldShowProvider(targets []ListTarget) bool {
 	return false
 }
 
-type targetListWidths struct {
-	Target   int
-	Provider int
-	Database int
-	User     int
-}
-
-func targetListWidthsFor(targets []ListTarget, showProvider bool) targetListWidths {
-	widths := targetListWidths{
-		Target:   len("TARGET"),
-		Provider: len("PROVIDER"),
-		Database: len("DATABASE"),
-		User:     len("USER"),
-	}
+func targetListWidthsFor(targets []ListTarget) tableWidths {
+	widths := newTableWidths("TARGET", "PROVIDER", "DATABASE", "USER")
 	for _, t := range targets {
-		widths.Target = max(widths.Target, len(t.Target))
-		if showProvider {
-			widths.Provider = max(widths.Provider, len(valueOrDash(t.Provider)))
-		}
-		widths.Database = max(widths.Database, len(valueOrDash(t.Database)))
-		widths.User = max(widths.User, len(valueOrDash(t.User)))
+		widths.fit(t.Target, valueOrDash(t.Provider), valueOrDash(t.Database), valueOrDash(t.User))
 	}
 	return widths
 }

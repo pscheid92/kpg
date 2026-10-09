@@ -2,7 +2,7 @@ package kube
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,7 +54,7 @@ func (zalandoProvider) targets(list unstructured.UnstructuredList) []kpg.Target 
 	return targets
 }
 
-func (p zalandoProvider) enrichTarget(ctx context.Context, c *Client, t kpg.Target) (kpg.Target, error) {
+func (zalandoProvider) enrichTarget(ctx context.Context, c *Client, t kpg.Target) (kpg.Target, error) {
 	secrets, err := c.core.CoreV1().Secrets(t.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "application=spilo,cluster-name=" + t.Cluster,
 	})
@@ -66,12 +66,11 @@ func (p zalandoProvider) enrichTarget(ctx context.Context, c *Client, t kpg.Targ
 	}
 	var users []string
 	for _, secret := range secrets.Items {
-		username := string(secret.Data["username"])
-		if username != "" {
+		if username := string(secret.Data["username"]); username != "" {
 			users = append(users, username)
 		}
 	}
-	t.UserOptions = zalandoMergeUserOptions(t.UserOptions, users)
+	t.UserOptions = zalandoSortUsers(t.UserOptions, users)
 	return t, nil
 }
 
@@ -93,62 +92,33 @@ func (zalandoProvider) applyConnectionOptions(t kpg.Target, opts kpg.Options) kp
 }
 
 func zalandoDatabaseOptions(item unstructured.Unstructured) []string {
-	seen := map[string]struct{}{}
 	var names []string
-	add := func(name string) {
-		if name == "" {
-			return
-		}
-		if _, ok := seen[name]; ok {
-			return
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
 	if databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases"); found {
 		for name := range databases {
-			add(name)
+			names = append(names, name)
 		}
 	}
 	if prepared, found, _ := unstructured.NestedMap(item.Object, "spec", "preparedDatabases"); found {
 		for name := range prepared {
-			add(name)
+			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
-	return names
+	return sortedUnique(names)
 }
 
 func zalandoUserOptions(item unstructured.Unstructured) []string {
-	seen := map[string]struct{}{}
-	var local, cross []string
-	add := func(name string) {
-		if name == "" {
-			return
-		}
-		if _, ok := seen[name]; ok {
-			return
-		}
-		seen[name] = struct{}{}
-		if zalandoIsCrossNamespaceUser(name) {
-			cross = append(cross, name)
-		} else {
-			local = append(local, name)
-		}
-	}
+	var names []string
 	if users, found := nestedStringSliceMap(item.Object, "spec", "users"); found {
 		for name := range users {
-			add(name)
+			names = append(names, name)
 		}
 	}
 	if databases, found, _ := unstructured.NestedStringMap(item.Object, "spec", "databases"); found {
 		for _, owner := range databases {
-			add(owner)
+			names = append(names, owner)
 		}
 	}
-	sort.Strings(local)
-	sort.Strings(cross)
-	return append(local, cross...)
+	return zalandoSortUsers(names)
 }
 
 func zalandoDatabaseOwners(item unstructured.Unstructured) map[string]string {
@@ -180,26 +150,15 @@ func zalandoDatabaseAndUser(item unstructured.Unstructured) (string, string) {
 		if len(names) == 0 {
 			names = crossNamespace
 		}
-		sort.Strings(names)
+		slices.Sort(names)
 		database := names[0]
 		return database, databases[database]
 	}
 	if prepared, found, _ := unstructured.NestedMap(item.Object, "spec", "preparedDatabases"); found && len(prepared) > 0 {
-		names := make([]string, 0, len(prepared))
-		for name := range prepared {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		return names[0], ""
+		return slices.Min(slices.Collect(mapKeys(prepared))), ""
 	}
-	users, found := nestedStringSliceMap(item.Object, "spec", "users")
-	if found && len(users) > 0 {
-		names := make([]string, 0, len(users))
-		for name := range users {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		return "", names[0]
+	if users, found := nestedStringSliceMap(item.Object, "spec", "users"); found && len(users) > 0 {
+		return "", slices.Min(slices.Collect(mapKeys(users)))
 	}
 	return "", ""
 }
@@ -248,31 +207,29 @@ func zalandoApplyUser(t kpg.Target, user string) kpg.Target {
 	return t
 }
 
-func zalandoMergeUserOptions(a, b []string) []string {
+// zalandoSortUsers merges user lists, drops empty and duplicate names, and
+// orders local users before cross-namespace ones so defaults stay predictable.
+func zalandoSortUsers(lists ...[]string) []string {
 	seen := map[string]struct{}{}
 	var local, cross []string
-	add := func(user string) {
-		if user == "" {
-			return
+	for _, list := range lists {
+		for _, user := range list {
+			if user == "" {
+				continue
+			}
+			if _, ok := seen[user]; ok {
+				continue
+			}
+			seen[user] = struct{}{}
+			if zalandoIsCrossNamespaceUser(user) {
+				cross = append(cross, user)
+			} else {
+				local = append(local, user)
+			}
 		}
-		if _, ok := seen[user]; ok {
-			return
-		}
-		seen[user] = struct{}{}
-		if zalandoIsCrossNamespaceUser(user) {
-			cross = append(cross, user)
-			return
-		}
-		local = append(local, user)
 	}
-	for _, user := range a {
-		add(user)
-	}
-	for _, user := range b {
-		add(user)
-	}
-	sort.Strings(local)
-	sort.Strings(cross)
+	slices.Sort(local)
+	slices.Sort(cross)
 	return append(local, cross...)
 }
 
@@ -287,4 +244,31 @@ func zalandoSplitCrossNamespaceUser(user string) (string, string) {
 func zalandoIsCrossNamespaceUser(user string) bool {
 	namespace, _ := zalandoSplitCrossNamespaceUser(user)
 	return namespace != ""
+}
+
+func sortedUnique(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	slices.Sort(unique)
+	return unique
+}
+
+func mapKeys[V any](m map[string]V) func(yield func(string) bool) {
+	return func(yield func(string) bool) {
+		for key := range m {
+			if !yield(key) {
+				return
+			}
+		}
+	}
 }

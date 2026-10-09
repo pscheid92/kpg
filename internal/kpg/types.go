@@ -3,6 +3,7 @@ package kpg
 import (
 	"context"
 	"io"
+	"time"
 )
 
 const (
@@ -22,14 +23,25 @@ type Options struct {
 	LocalPort      int
 	Output         string
 	OutputExplicit bool
+	// RequestTimeout bounds discovery, list, and get calls against the API
+	// server. Zero, the default, leaves them unbounded so that interactive
+	// credential plugins are never cut short. The port-forward stream itself
+	// is never limited.
+	RequestTimeout time.Duration
 	Selection      Selection
 }
 
+// Selection configures how kpg asks the user to choose between targets,
+// databases, or users. Prompting is only possible when both streams are set;
+// Interactive switches from a numbered prompt to the full-screen picker.
 type Selection struct {
-	Enabled     bool
 	Interactive bool
 	In          io.Reader
 	Out         io.Writer
+}
+
+func (s Selection) canPrompt() bool {
+	return s.In != nil && s.Out != nil
 }
 
 type Target struct {
@@ -44,6 +56,9 @@ type Target struct {
 	DatabaseOptions []string
 	UserOptions     []string
 	DatabaseOwners  map[string]string
+	// UserSecrets maps a user to the secret that stores its password when the
+	// provider knows it from the cluster spec.
+	UserSecrets map[string]string
 }
 
 type ListTarget struct {

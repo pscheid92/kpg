@@ -3,7 +3,7 @@ package kube
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,10 +15,13 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/pscheid92/kpg/internal/buildinfo"
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
 type Client struct {
+	// restConfig carries no request timeout because it backs the long-lived
+	// port-forward stream. The API clients below use a copy with a deadline.
 	restConfig       *rest.Config
 	dynamic          dynamic.Interface
 	core             kubernetes.Interface
@@ -37,11 +40,17 @@ func New(opts kpg.Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	dyn, err := dynamic.NewForConfig(config)
+	config.UserAgent = "kpg/" + buildinfo.Current().Version
+
+	// Discovery, list, and get calls fail fast when the API server is
+	// unreachable instead of hanging until the TCP stack gives up.
+	apiConfig := rest.CopyConfig(config)
+	apiConfig.Timeout = opts.RequestTimeout
+	dyn, err := dynamic.NewForConfig(apiConfig)
 	if err != nil {
 		return nil, err
 	}
-	core, err := kubernetes.NewForConfig(config)
+	core, err := kubernetes.NewForConfig(apiConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +155,6 @@ func (c *Client) ListNamespaces(ctx context.Context) ([]string, error) {
 			names = append(names, namespace.Name)
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names, nil
 }

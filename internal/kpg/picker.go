@@ -1,7 +1,6 @@
 package kpg
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +8,8 @@ import (
 	"strings"
 )
 
+// PickFromList asks for one of options with a numbered prompt. It is the
+// fallback when the interactive picker cannot run.
 func PickFromList(in io.Reader, out io.Writer, label string, options []string) (string, error) {
 	if len(options) == 0 {
 		return "", fmt.Errorf("no %s to choose from", label)
@@ -38,6 +39,8 @@ func PickFromList(in io.Reader, out io.Writer, label string, options []string) (
 	return options[choice-1], nil
 }
 
+// readUnbufferedLine reads one line byte by byte so that input typed ahead
+// for the next prompt, or for the client command, is not swallowed.
 func readUnbufferedLine(in io.Reader) (string, error) {
 	var b strings.Builder
 	one := make([]byte, 1)
@@ -58,6 +61,7 @@ func readUnbufferedLine(in io.Reader) (string, error) {
 	}
 }
 
+// PickTarget asks for one of targets with a numbered table prompt.
 func PickTarget(in io.Reader, out io.Writer, targets []Target) (Target, error) {
 	if len(targets) == 0 {
 		return Target{}, errors.New("no targets found")
@@ -70,11 +74,11 @@ func PickTarget(in io.Reader, out io.Writer, targets []Target) (Target, error) {
 		return Target{}, err
 	}
 	widths := computeTargetPickerWidths(targets)
-	if err := writef(out, "  #  %-*s  %-*s  %-*s  %-*s\n", widths.Target, "Target", widths.Provider, "Provider", widths.Database, "Database", widths.User, "User"); err != nil {
+	if err := writef(out, "  #  %s\n", targetPickerHeader(widths)); err != nil {
 		return Target{}, err
 	}
 	for i, target := range targets {
-		if err := writef(out, "  %-2d %-*s  %-*s  %-*s  %-*s\n", i+1, widths.Target, target.ID(), widths.Provider, valueOrDash(target.Provider), widths.Database, valueOrDash(target.Database), widths.User, valueOrDash(target.User)); err != nil {
+		if err := writef(out, "  %-2d %s\n", i+1, targetPickerRow(target, widths)); err != nil {
 			return Target{}, err
 		}
 	}
@@ -85,36 +89,29 @@ func PickTarget(in io.Reader, out io.Writer, targets []Target) (Target, error) {
 		return Target{}, err
 	}
 
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	line, err := readUnbufferedLine(in)
+	if err != nil {
 		return Target{}, err
 	}
 	choice, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil || choice < 1 || choice > len(targets) {
-		return Target{}, fmt.Errorf("invalid target selection")
+		return Target{}, errors.New("invalid target selection")
 	}
 	return targets[choice-1], nil
 }
 
-type pickerWidths struct {
-	Target   int
-	Provider int
-	Database int
-	User     int
-}
-
-func computeTargetPickerWidths(targets []Target) pickerWidths {
-	widths := pickerWidths{
-		Target:   len("Target"),
-		Provider: len("Provider"),
-		Database: len("Database"),
-		User:     len("User"),
-	}
+func computeTargetPickerWidths(targets []Target) tableWidths {
+	widths := newTableWidths("Target", "Provider", "Database", "User")
 	for _, target := range targets {
-		widths.Target = max(widths.Target, len(target.ID()))
-		widths.Provider = max(widths.Provider, len(valueOrDash(target.Provider)))
-		widths.Database = max(widths.Database, len(valueOrDash(target.Database)))
-		widths.User = max(widths.User, len(valueOrDash(target.User)))
+		widths.fit(target.ID(), valueOrDash(target.Provider), valueOrDash(target.Database), valueOrDash(target.User))
 	}
 	return widths
+}
+
+func targetPickerHeader(widths tableWidths) string {
+	return fmt.Sprintf("%-*s  %-*s  %-*s  %-*s", widths.Target, "Target", widths.Provider, "Provider", widths.Database, "Database", widths.User, "User")
+}
+
+func targetPickerRow(target Target, widths tableWidths) string {
+	return fmt.Sprintf("%-*s  %-*s  %-*s  %-*s", widths.Target, target.ID(), widths.Provider, valueOrDash(target.Provider), widths.Database, valueOrDash(target.Database), widths.User, valueOrDash(target.User))
 }

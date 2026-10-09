@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConnectMissingAppSecretUsesBootstrapFallbackAndStoresNoSecrets(t *testing.T) {
@@ -100,9 +101,8 @@ func TestConnectNoTargetPickerSelectsTarget(t *testing.T) {
 	opts := Options{
 		OutputExplicit: true,
 		Selection: Selection{
-			Enabled: true,
-			In:      strings.NewReader("2\n"),
-			Out:     &prompt,
+			In:  strings.NewReader("2\n"),
+			Out: &prompt,
 		},
 	}
 	err := Connect(context.Background(), &out, &errOut, k, opts, "", nil, true)
@@ -144,9 +144,8 @@ func TestConnectNoTargetPickerStartsShell(t *testing.T) {
 	var errOut bytes.Buffer
 	opts := Options{
 		Selection: Selection{
-			Enabled: true,
-			In:      strings.NewReader("2\n"),
-			Out:     &prompt,
+			In:  strings.NewReader("2\n"),
+			Out: &prompt,
 		},
 	}
 	err := Connect(context.Background(), &out, &errOut, k, opts, "", nil, true)
@@ -224,9 +223,8 @@ func TestConnectUsesSelectedDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
 	opts := Options{
 		OutputExplicit: true,
 		Selection: Selection{
-			Enabled: true,
-			In:      strings.NewReader("2\n"),
-			Out:     &prompt,
+			In:  strings.NewReader("2\n"),
+			Out: &prompt,
 		},
 	}
 	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
@@ -262,9 +260,8 @@ func TestConnectPromptsForAmbiguousUserAndDatabase(t *testing.T) {
 	opts := Options{
 		OutputExplicit: true,
 		Selection: Selection{
-			Enabled: true,
-			In:      strings.NewReader("2\n2\n"),
-			Out:     &prompt,
+			In:  strings.NewReader("2\n2\n"),
+			Out: &prompt,
 		},
 	}
 	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
@@ -394,6 +391,165 @@ func TestConnectExecReturnsClientExitCode(t *testing.T) {
 	}
 	if got, want := exitErr.Error(), "command exited with code 7"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func shortReconnectDelay(t *testing.T) {
+	t.Helper()
+	old := reconnectDelay
+	reconnectDelay = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { reconnectDelay = old })
+}
+
+func TestConnectStoresLastTargetOnceTunnelIsReadyEvenIfCommandFails(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	k := &fakeKube{
+		targets: []Target{{Provider: ProviderCNPG, Namespace: "app", Cluster: "app-db"}},
+	}
+	err := Connect(context.Background(), io.Discard, io.Discard, k, Options{}, "app-db", []string{"sh", "-c", "exit 3"}, true)
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("expected exit code 3, got %v", err)
+	}
+	last, err := ReadLastTarget()
+	if err != nil {
+		t.Fatalf("last target should be stored once the tunnel worked: %v", err)
+	}
+	if last.Provider != ProviderCNPG || last.Namespace != "app" || last.Cluster != "app-db" {
+		t.Fatalf("last = %#v", last)
+	}
+}
+
+func TestConnectDoesNotStoreLastTargetWhenTunnelNeverReady(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	k := &fakeKube{
+		targets: []Target{{Namespace: "app", Cluster: "app-db"}},
+		portForwardScript: []func(ready chan struct{}) error{
+			func(chan struct{}) error { return errors.New("pod not found") },
+		},
+	}
+	var errOut bytes.Buffer
+	err := Connect(context.Background(), io.Discard, &errOut, k, Options{}, "app-db", []string{"sh", "-c", "exit 0"}, true)
+	if err == nil || !strings.Contains(err.Error(), "port-forward failed") || !strings.Contains(err.Error(), "pod not found") {
+		t.Fatalf("expected port-forward failure, got %v", err)
+	}
+	if _, err := ReadLastTarget(); err == nil {
+		t.Fatal("last target must not be stored when the tunnel never came up")
+	}
+	if k.portForwardCalls != 1 {
+		t.Fatalf("portForwardCalls = %d, want no reconnect before readiness", k.portForwardCalls)
+	}
+}
+
+func TestConnectReconnectsWhenTunnelDrops(t *testing.T) {
+	shortReconnectDelay(t)
+	k := &fakeKube{
+		targets: []Target{{Namespace: "app", Cluster: "app-db"}},
+		portForwardScript: []func(ready chan struct{}) error{
+			func(ready chan struct{}) error {
+				close(ready)
+				return errors.New("lost connection to pod")
+			},
+		},
+	}
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Connect(context.Background(), &out, &errOut, k, Options{}, "app-db", []string{"sh", "-c", "sleep 0.2; printf ok"}, false)
+	if err != nil {
+		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
+	}
+	if out.String() != "ok" {
+		t.Fatalf("command output = %q", out.String())
+	}
+	if k.portForwardCalls != 2 {
+		t.Fatalf("portForwardCalls = %d, want 2", k.portForwardCalls)
+	}
+	for _, want := range []string{"lost: lost connection to pod", "reconnecting", "attempt 1 of 5", "re-established"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, errOut.String())
+		}
+	}
+}
+
+func TestConnectReportsTunnelLossAfterReconnectAttemptsFail(t *testing.T) {
+	shortReconnectDelay(t)
+	script := []func(ready chan struct{}) error{
+		func(ready chan struct{}) error {
+			close(ready)
+			return errors.New("lost connection to pod")
+		},
+	}
+	for range maxReconnectAttempts {
+		script = append(script, func(chan struct{}) error { return errors.New("pod gone") })
+	}
+	k := &fakeKube{
+		targets:           []Target{{Namespace: "app", Cluster: "app-db"}},
+		portForwardScript: script,
+	}
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Connect(context.Background(), &out, &errOut, k, Options{OutputExplicit: true}, "app-db", nil, false)
+	if err == nil || !strings.Contains(err.Error(), "port-forward failed") || !strings.Contains(err.Error(), "pod gone") {
+		t.Fatalf("expected tunnel loss error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "export PGHOST=127.0.0.1\n") {
+		t.Fatalf("values should have been printed once the tunnel was ready:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "giving up after 5 reconnect attempts") {
+		t.Fatalf("stderr missing give-up message:\n%s", errOut.String())
+	}
+	if k.portForwardCalls != 1+maxReconnectAttempts {
+		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
+	}
+}
+
+func TestConnectWarnsWhenNoCredentialsFound(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{{Namespace: "app", Cluster: "app-db", User: "owner", SecretName: "app-db-app"}},
+	}
+	var errOut bytes.Buffer
+	if err := Connect(context.Background(), io.Discard, &errOut, k, Options{OutputExplicit: true}, "app-db", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), "warning: no credentials found for user owner in secret app/app-db-app") {
+		t.Fatalf("missing credentials warning:\n%s", errOut.String())
+	}
+}
+
+func TestChildEnvScrubsConflictingVariables(t *testing.T) {
+	env := childEnv(
+		[]string{"HOME=/home/x", "PGHOSTADDR=10.0.0.1", "PGSERVICE=prod", "PGSERVICEFILE=/svc", "PGUSER=old", "PGPASSWORD=old", "KPG_TARGET=old/old"},
+		Target{Provider: ProviderCNPG, Namespace: "app", Cluster: "app-db"},
+		EnvValues{Host: "127.0.0.1", Port: 15432, User: "app", Password: "pw", Database: "appdb"},
+	)
+	joined := strings.Join(env, "\n") + "\n"
+	for _, absent := range []string{"PGHOSTADDR=", "PGSERVICE=", "PGSERVICEFILE=", "PGUSER=old", "PGPASSWORD=old", "KPG_TARGET=old"} {
+		if strings.Contains(joined, absent) {
+			t.Fatalf("child env still contains %q:\n%s", absent, joined)
+		}
+	}
+	for _, want := range []string{"HOME=/home/x\n", "PGHOST=127.0.0.1\n", "PGPORT=15432\n", "PGUSER=app\n", "PGPASSWORD=pw\n", "PGDATABASE=appdb\n", "PGSSLMODE=disable\n", "KPG_TARGET=app/app-db\n", "KPG_PROVIDER=cnpg\n"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("child env missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Count(joined, "PGUSER=") != 1 {
+		t.Fatalf("PGUSER must appear once:\n%s", joined)
+	}
+}
+
+func TestLookupShellReturnsFirstAvailableCandidate(t *testing.T) {
+	got, err := lookupShell("", "definitely-missing-shell-kpg", "sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(got) != "sh" {
+		t.Fatalf("shell = %q", got)
+	}
+	if _, err := lookupShell("definitely-missing-shell-kpg"); err == nil || !strings.Contains(err.Error(), "could not find a shell") {
+		t.Fatalf("expected missing shell error, got %v", err)
 	}
 }
 

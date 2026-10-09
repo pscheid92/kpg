@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -113,5 +114,60 @@ func TestRenderTargetListWithoutProviderColumn(t *testing.T) {
 	got := out.String()
 	if strings.Contains(got, "PROVIDER") || !strings.Contains(got, "app/app-db") || !strings.Contains(got, "-") {
 		t.Fatalf("unexpected list output:\n%s", got)
+	}
+}
+
+func TestListReportsNoTargets(t *testing.T) {
+	k := &fakeKube{}
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	if err := List(context.Background(), &out, &errOut, k, Options{Namespace: "empty"}); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no table, got %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), `no Postgres targets found in namespace "empty"`) {
+		t.Fatalf("missing empty message:\n%s", errOut.String())
+	}
+
+	errOut.Reset()
+	if err := List(context.Background(), &out, &errOut, k, Options{Output: "json"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != "[]" {
+		t.Fatalf("json output = %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "no Postgres targets found; check the kube context") {
+		t.Fatalf("missing empty message:\n%s", errOut.String())
+	}
+}
+
+func TestListResolvesTargetsConcurrentlyInOrder(t *testing.T) {
+	const count = 3 * listResolveWorkers
+	targets := make([]Target, 0, count)
+	secrets := map[string]AppSecret{}
+	for i := range count {
+		name := fmt.Sprintf("db-%02d", i)
+		targets = append(targets, Target{Namespace: "ns", Cluster: name})
+		secrets["ns/"+name] = AppSecret{Username: "user-" + name, Database: "database-" + name}
+	}
+	k := &fakeKube{targets: targets, secrets: secrets}
+	var out bytes.Buffer
+	if err := List(context.Background(), &out, io.Discard, k, Options{Output: "json"}); err != nil {
+		t.Fatal(err)
+	}
+	var got []ListTarget
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid json %v:\n%s", err, out.String())
+	}
+	if len(got) != count {
+		t.Fatalf("len = %d", len(got))
+	}
+	for i, item := range got {
+		name := fmt.Sprintf("db-%02d", i)
+		if item.Cluster != name || item.User != "user-"+name || item.Database != "database-"+name {
+			t.Fatalf("item %d = %#v", i, item)
+		}
 	}
 }

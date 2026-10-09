@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestPickTargetFallbackTable(t *testing.T) {
@@ -37,18 +37,18 @@ func TestTargetPickerModelFiltersAndSelects(t *testing.T) {
 		{Provider: ProviderCNPG, Namespace: "billing", Cluster: "billing-db", Database: "billing", User: "billing"},
 		{Provider: ProviderCNPG, Namespace: "identity", Cluster: "identity-db", Database: "identity", User: "identity"},
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("iden")})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'i', Text: "iden"})
 	model = updated.(targetPickerModel)
 	if len(model.matches) != 1 {
 		t.Fatalf("matches = %#v", model.matches)
 	}
-	if got := model.targets[model.matches[0]].ID(); got != "identity/identity-db" {
+	if got := model.items[model.matches[0]].ID(); got != "identity/identity-db" {
 		t.Fatalf("match = %s", got)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(targetPickerModel)
-	if model.selected < 0 || model.targets[model.selected].ID() != "identity/identity-db" {
-		t.Fatalf("selected = %d %#v", model.selected, model.targets)
+	if model.selected < 0 || model.items[model.selected].ID() != "identity/identity-db" {
+		t.Fatalf("selected = %d %#v", model.selected, model.items)
 	}
 }
 
@@ -64,34 +64,34 @@ func TestTargetPickerModelNavigationCancelAndView(t *testing.T) {
 
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 9})
 	model = updated.(targetPickerModel)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updated.(targetPickerModel)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updated.(targetPickerModel)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = updated.(targetPickerModel)
 	if model.cursor != 1 {
 		t.Fatalf("cursor after navigation = %d", model.cursor)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 	model = updated.(targetPickerModel)
 	if model.cursor != len(model.matches)-1 {
 		t.Fatalf("cursor after end = %d", model.cursor)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyHome})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyHome})
 	model = updated.(targetPickerModel)
 	if model.cursor != 0 {
 		t.Fatalf("cursor after home = %d", model.cursor)
 	}
 
-	view := model.View()
+	view := model.View().Content
 	for _, want := range []string{"Select target", "Filter:", "Target", "Provider", "app/app-db", "Enter connects"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
 
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(targetPickerModel)
 	if !model.canceled {
 		t.Fatal("expected picker to be canceled")
@@ -117,14 +117,14 @@ func TestTargetPickerModelNoMatchesBackspaceAndVisibleRange(t *testing.T) {
 		t.Fatalf("visibleRange = %d,%d", start, end)
 	}
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("missing")})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'm', Text: "missing"})
 	model = updated.(targetPickerModel)
-	if len(model.matches) != 0 || !strings.Contains(model.View(), "No matching targets") {
-		t.Fatalf("expected no matches, got %#v\n%s", model.matches, model.View())
+	if len(model.matches) != 0 || !strings.Contains(model.View().Content, "No matching targets") {
+		t.Fatalf("expected no matches, got %#v\n%s", model.matches, model.View().Content)
 	}
 
 	for range len("missing") {
-		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		model = updated.(targetPickerModel)
 	}
 	if model.query != "" || len(model.matches) != len(targets) {
@@ -133,7 +133,7 @@ func TestTargetPickerModelNoMatchesBackspaceAndVisibleRange(t *testing.T) {
 }
 
 func TestTargetPickerRowUsesDashesForMissingMetadata(t *testing.T) {
-	row := targetPickerRow(Target{Namespace: "app", Cluster: "app-db"}, pickerWidths{
+	row := targetPickerRow(Target{Namespace: "app", Cluster: "app-db"}, tableWidths{
 		Target:   12,
 		Provider: 8,
 		Database: 8,
@@ -155,5 +155,66 @@ func TestPickTargetInteractiveRejectsEmptyTargets(t *testing.T) {
 	_, err := PickTargetInteractive(strings.NewReader(""), io.Discard, nil)
 	if err == nil || !strings.Contains(err.Error(), "no targets found") {
 		t.Fatalf("expected no targets error, got %v", err)
+	}
+}
+
+func TestListPickerModelFiltersSelectsAndCancels(t *testing.T) {
+	model := newListPickerModel("database", []string{"app", "reports", "analytics"})
+	view := model.View().Content
+	for _, want := range []string{"Select database", "app", "reports", "analytics", "Enter selects"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'r', Text: "rep"})
+	model = updated.(listPickerModel)
+	if len(model.matches) != 1 || model.items[model.matches[0]] != "reports" {
+		t.Fatalf("matches = %#v", model.matches)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(listPickerModel)
+	if model.selected < 0 || model.items[model.selected] != "reports" {
+		t.Fatalf("selected = %d", model.selected)
+	}
+
+	model = newListPickerModel("user", []string{"a", "b"})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'z', Text: "zzz"})
+	model = updated.(listPickerModel)
+	if len(model.matches) != 0 || !strings.Contains(model.View().Content, "No matching user") {
+		t.Fatalf("expected no matches, got %#v\n%s", model.matches, model.View().Content)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(listPickerModel)
+	if model.selected != -1 {
+		t.Fatalf("enter without matches selected %d", model.selected)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(listPickerModel)
+	if !model.canceled {
+		t.Fatal("expected ctrl+c to cancel")
+	}
+}
+
+func TestPickFromListInteractiveShortCircuits(t *testing.T) {
+	if _, err := PickFromListInteractive(strings.NewReader(""), io.Discard, "database", nil); err == nil || !strings.Contains(err.Error(), "no database to choose from") {
+		t.Fatalf("expected empty options error, got %v", err)
+	}
+	got, err := PickFromListInteractive(strings.NewReader(""), io.Discard, "database", []string{"only"})
+	if err != nil || got != "only" {
+		t.Fatalf("single option = %q, %v", got, err)
+	}
+}
+
+func TestPickTargetLeavesFollowingInputUnread(t *testing.T) {
+	in := strings.NewReader("1\n2\n")
+	if _, err := PickTarget(in, io.Discard, []Target{{Namespace: "app", Cluster: "app-db"}}); err != nil {
+		t.Fatal(err)
+	}
+	rest, err := io.ReadAll(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rest) != "2\n" {
+		t.Fatalf("picker consumed input meant for the next prompt; remaining %q", rest)
 	}
 }
