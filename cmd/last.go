@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -23,6 +24,9 @@ environment values and exits when the command exits.`,
 				return err
 			}
 			a.opts.OutputExplicit = cmd.Root().PersistentFlags().Changed("output")
+			if a.opts.OutputExplicit && len(clientArgs) > 0 {
+				return errors.New("--output cannot be combined with a command after --")
+			}
 			lt, err := kpg.ReadLastTarget()
 			if err != nil {
 				return fmt.Errorf("no last target: %w", err)
@@ -49,9 +53,9 @@ func lastClientArgs(cmd *cobra.Command, args []string) ([]string, error) {
 	case dash == 0:
 		return args, nil
 	case dash > 0:
-		return nil, fmt.Errorf("last does not accept a target; use: kpg last -- command")
+		return nil, errors.New("last does not accept a target; use: kpg last -- command")
 	case len(args) > 0:
-		return nil, fmt.Errorf("last does not accept arguments without --")
+		return nil, errors.New("last does not accept arguments without --")
 	default:
 		return nil, nil
 	}

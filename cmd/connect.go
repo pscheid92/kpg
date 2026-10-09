@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +25,12 @@ When --output is provided, kpg prints PG* environment values and keeps the
 tunnel alive until Ctrl-C.
 
 If a command is provided after --, kpg starts the tunnel, injects PG*
-environment values into that command, and stops the tunnel when it exits.`,
+environment values into that command, and stops the tunnel when it exits.
+
+Ctrl-C inside the subshell or the command is handled by that program, for
+example psql cancels the running query; kpg keeps the tunnel open until the
+program exits. A tunnel that drops, for example after a switchover, is
+re-established automatically a few times.`,
 		Example: `  kpg connect app-db
   kpg connect
   kpg connect app-db -p 15432
@@ -42,7 +48,7 @@ environment values into that command, and stops the tunnel when it exits.`,
 				return err
 			}
 			if a.opts.OutputExplicit && len(clientArgs) > 0 {
-				return fmt.Errorf("--output cannot be combined with a command after --")
+				return errors.New("--output cannot be combined with a command after --")
 			}
 			k, err := a.kube()
 			if err != nil {

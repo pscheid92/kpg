@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pscheid92/kpg/internal/buildinfo"
 	"github.com/pscheid92/kpg/internal/kpg"
@@ -49,13 +50,23 @@ func TestRootRejectsInvalidSharedFlags(t *testing.T) {
 	}{
 		{
 			name: "output",
-			args: []string{"list", "-o", "yaml"},
+			args: []string{"connect", "app-db", "-o", "yaml"},
 			want: `invalid --output "yaml"`,
 		},
 		{
 			name: "local-port",
 			args: []string{"list", "-p", "70000"},
 			want: "invalid --local-port 70000",
+		},
+		{
+			name: "request-timeout",
+			args: []string{"list", "--request-timeout", "-1s"},
+			want: "invalid --request-timeout",
+		},
+		{
+			name: "list output",
+			args: []string{"list", "-o", "dotenv"},
+			want: "list supports only --output json",
 		},
 	}
 	for _, tt := range tests {
@@ -382,6 +393,18 @@ func TestLastAcceptsUserAndDatabaseOverrides(t *testing.T) {
 	}
 }
 
+func TestLastRejectsOutputWithCommand(t *testing.T) {
+	cmd := newRootCommand(io.Discard, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+		t.Fatal("kube factory should not be called")
+		return nil, nil
+	})
+	cmd.SetArgs([]string{"last", "-o", "json", "--", "psql"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--output cannot be combined") {
+		t.Fatalf("expected output command conflict, got %v", err)
+	}
+}
+
 func TestLastRejectsArgsWithoutDash(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newRootCommand(&out, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
@@ -494,5 +517,28 @@ func setBuildInfo(t *testing.T, version, commit, date string) func() {
 		buildinfo.Version = oldVersion
 		buildinfo.Commit = oldCommit
 		buildinfo.Date = oldDate
+	}
+}
+
+func TestRequestTimeoutFlagReachesKubeFactory(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want time.Duration
+	}{
+		{args: []string{"list"}, want: 0},
+		{args: []string{"list", "--request-timeout", "5s"}, want: 5 * time.Second},
+		{args: []string{"list", "--request-timeout", "0"}, want: 0},
+	} {
+		fake := &fakeKube{}
+		cmd := newRootCommand(io.Discard, io.Discard, func(opts kpg.Options) (kpg.Kube, error) {
+			if opts.RequestTimeout != tc.want {
+				t.Fatalf("%v: request timeout = %s, want %s", tc.args, opts.RequestTimeout, tc.want)
+			}
+			return fake, nil
+		})
+		cmd.SetArgs(tc.args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
 	}
 }

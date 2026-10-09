@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ func (a *app) versionCommand() *cobra.Command {
 			info := buildinfo.Current()
 			if cmd.Root().PersistentFlags().Changed("output") {
 				if a.opts.Output != "json" {
-					return fmt.Errorf("version only supports --output json")
+					return errors.New("version only supports --output json")
 				}
 				encoder := json.NewEncoder(a.stdout)
 				encoder.SetIndent("", "  ")
