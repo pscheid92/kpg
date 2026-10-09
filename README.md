@@ -317,7 +317,8 @@ own sections, `docs:`, `test:`, `chore:`, and `ci:` are left out.
 
 ## Completion
 
-Shell completion is provided by Cobra:
+The Homebrew cask installs bash, zsh and fish completions automatically.
+For other installs, shell completion is provided by Cobra:
 
 ```sh
 kpg completion zsh
