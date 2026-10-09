@@ -1,3 +1,5 @@
+// Command kpg connects to Kubernetes-hosted Postgres databases through a
+// local port-forward and exposes the connection as PG* environment values.
 package main
 
 import (
