@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/rest"
@@ -201,5 +202,31 @@ func TestPortForwardDialerPrefersWebsocketWithSPDYFallback(t *testing.T) {
 	}
 	if _, ok := dialer.(*portforward.StreamingFallbackDialer); !ok {
 		t.Fatalf("dialer = %T, want fallback dialer", dialer)
+	}
+}
+
+func TestServicePodReportsReadinessAndSkipsTerminatingPods(t *testing.T) {
+	labels := map[string]string{"cnpg.io/cluster": "app-db"}
+	terminating := pod("app", "app-db-1", labels, corev1.PodRunning, true)
+	now := metav1.Now()
+	terminating.DeletionTimestamp = &now
+	terminating.Finalizers = []string{"kpg.test/keep"}
+
+	c := fakeClient(nil, []runtime.Object{
+		rwService("app", "app-db", labels),
+		terminating,
+		pod("app", "app-db-2", labels, corev1.PodRunning, false),
+	})
+	name, ready, err := c.ServicePod(context.Background(), kpg.Target{Namespace: "app", Cluster: "app-db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "app-db-2" || ready {
+		t.Fatalf("got %s ready=%v, want app-db-2 not ready (the terminating pod must be skipped)", name, ready)
+	}
+
+	c = fakeClient(nil, []runtime.Object{rwService("app", "app-db", labels), terminating})
+	if _, _, err := c.ServicePod(context.Background(), kpg.Target{Namespace: "app", Cluster: "app-db"}); err == nil || !strings.Contains(err.Error(), "has no running pods") {
+		t.Fatalf("expected no running pods while only the old primary is left, got %v", err)
 	}
 }

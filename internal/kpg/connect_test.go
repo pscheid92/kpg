@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestConnectMissingAppSecretUsesBootstrapFallbackAndStoresNoSecrets(t *testing.T) {
@@ -23,9 +22,9 @@ func TestConnectMissingAppSecretUsesBootstrapFallbackAndStoresNoSecrets(t *testi
 			{Namespace: "app", Cluster: "app-db", Database: "bootstrapdb", User: "owner"},
 		},
 	}
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	var errOut bytes.Buffer
-	if err := Connect(context.Background(), &out, &errOut, k, Options{}, "app-db", nil, true); err != nil {
+	if err := Connect(ctx, out, &errOut, k, Options{}, "app-db", nil, true); err != nil {
 		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
 	}
 	if !strings.Contains(out.String(), "export PGUSER=owner\n") || !strings.Contains(out.String(), "export PGDATABASE=bootstrapdb\n") {
@@ -38,8 +37,8 @@ func TestConnectMissingAppSecretUsesBootstrapFallbackAndStoresNoSecrets(t *testi
 	if strings.Contains(string(data), "owner") || strings.Contains(string(data), "bootstrapdb") {
 		t.Fatalf("last target leaked connection data: %s", string(data))
 	}
-	if k.portForwardCalls != 1 {
-		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
+	if k.calls() != 1 {
+		t.Fatalf("portForwardCalls = %d", k.calls())
 	}
 }
 
@@ -96,7 +95,7 @@ func TestConnectNoTargetPickerSelectsTarget(t *testing.T) {
 		},
 	}
 	var prompt bytes.Buffer
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	var errOut bytes.Buffer
 	opts := Options{
 		OutputExplicit: true,
@@ -105,7 +104,7 @@ func TestConnectNoTargetPickerSelectsTarget(t *testing.T) {
 			Out: &prompt,
 		},
 	}
-	err := Connect(context.Background(), &out, &errOut, k, opts, "", nil, true)
+	err := Connect(ctx, out, &errOut, k, opts, "", nil, true)
 	if err != nil {
 		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
 	}
@@ -165,6 +164,9 @@ func TestConnectNoTargetPickerStartsShell(t *testing.T) {
 	if !strings.Contains(errOut.String(), "starting subshell") || !strings.Contains(errOut.String(), "exit subshell to disconnect") {
 		t.Fatalf("missing shell status:\n%s", errOut.String())
 	}
+	if strings.Contains(errOut.String(), "lost") {
+		t.Fatalf("a normal exit must not be reported as a lost tunnel:\n%s", errOut.String())
+	}
 	last, err := ReadLastTarget()
 	if err != nil {
 		t.Fatal(err)
@@ -189,13 +191,13 @@ func TestConnectUserAndDatabaseFlagsOverrideTargetValues(t *testing.T) {
 			"legacy/acid-main": {Password: "rpw"},
 		},
 	}
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	opts := Options{
 		User:           "reporting_user",
 		Database:       "reports",
 		OutputExplicit: true,
 	}
-	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+	if err := Connect(ctx, out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
 		t.Fatalf("Connect error = %v", err)
 	}
 	if !strings.Contains(out.String(), "export PGUSER=reporting_user\n") || !strings.Contains(out.String(), "export PGDATABASE=reports\n") || !strings.Contains(out.String(), "export PGPASSWORD=rpw\n") {
@@ -219,7 +221,7 @@ func TestConnectUsesSelectedDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
 		},
 	}
 	var prompt bytes.Buffer
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	opts := Options{
 		OutputExplicit: true,
 		Selection: Selection{
@@ -227,7 +229,7 @@ func TestConnectUsesSelectedDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
 			Out: &prompt,
 		},
 	}
-	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+	if err := Connect(ctx, out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
 		t.Fatalf("Connect error = %v", err)
 	}
 	if !strings.Contains(prompt.String(), "Select database:") || strings.Contains(prompt.String(), "Select user:") {
@@ -256,7 +258,7 @@ func TestConnectPromptsForAmbiguousUserAndDatabase(t *testing.T) {
 		},
 	}
 	var prompt bytes.Buffer
-	var out bytes.Buffer
+	ctx, out := untilRendered(t)
 	opts := Options{
 		OutputExplicit: true,
 		Selection: Selection{
@@ -264,7 +266,7 @@ func TestConnectPromptsForAmbiguousUserAndDatabase(t *testing.T) {
 			Out: &prompt,
 		},
 	}
-	if err := Connect(context.Background(), &out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
+	if err := Connect(ctx, out, io.Discard, k, opts, "acid-main", nil, false); err != nil {
 		t.Fatalf("Connect error = %v", err)
 	}
 	if !strings.Contains(prompt.String(), "Select database:") || !strings.Contains(prompt.String(), "Select user:") {
@@ -334,8 +336,8 @@ func TestConnectLocalPortConflictDoesNotPortForward(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected local port conflict")
 	}
-	if k.portForwardCalls != 0 {
-		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
+	if k.calls() != 0 {
+		t.Fatalf("portForwardCalls = %d", k.calls())
 	}
 }
 
@@ -394,13 +396,6 @@ func TestConnectExecReturnsClientExitCode(t *testing.T) {
 	}
 }
 
-func shortReconnectDelay(t *testing.T) {
-	t.Helper()
-	old := reconnectDelay
-	reconnectDelay = func(int) time.Duration { return 0 }
-	t.Cleanup(func() { reconnectDelay = old })
-}
-
 func TestConnectStoresLastTargetOnceTunnelIsReadyEvenIfCommandFails(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
@@ -438,70 +433,8 @@ func TestConnectDoesNotStoreLastTargetWhenTunnelNeverReady(t *testing.T) {
 	if _, err := ReadLastTarget(); err == nil {
 		t.Fatal("last target must not be stored when the tunnel never came up")
 	}
-	if k.portForwardCalls != 1 {
-		t.Fatalf("portForwardCalls = %d, want no reconnect before readiness", k.portForwardCalls)
-	}
-}
-
-func TestConnectReconnectsWhenTunnelDrops(t *testing.T) {
-	shortReconnectDelay(t)
-	k := &fakeKube{
-		targets: []Target{{Namespace: "app", Cluster: "app-db"}},
-		portForwardScript: []func(ready chan struct{}) error{
-			func(ready chan struct{}) error {
-				close(ready)
-				return errors.New("lost connection to pod")
-			},
-		},
-	}
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	err := Connect(context.Background(), &out, &errOut, k, Options{}, "app-db", []string{"sh", "-c", "sleep 0.2; printf ok"}, false)
-	if err != nil {
-		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
-	}
-	if out.String() != "ok" {
-		t.Fatalf("command output = %q", out.String())
-	}
-	if k.portForwardCalls != 2 {
-		t.Fatalf("portForwardCalls = %d, want 2", k.portForwardCalls)
-	}
-	for _, want := range []string{"lost: lost connection to pod", "reconnecting now (attempt 1 of 5)", "re-established on 127.0.0.1:", `in psql run: \c "host=127.0.0.1 port=`} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Fatalf("stderr missing %q:\n%s", want, errOut.String())
-		}
-	}
-}
-
-func TestConnectReportsTunnelLossAfterReconnectAttemptsFail(t *testing.T) {
-	shortReconnectDelay(t)
-	script := []func(ready chan struct{}) error{
-		func(ready chan struct{}) error {
-			close(ready)
-			return errors.New("lost connection to pod")
-		},
-	}
-	for range maxReconnectAttempts {
-		script = append(script, func(chan struct{}) error { return errors.New("pod gone") })
-	}
-	k := &fakeKube{
-		targets:           []Target{{Namespace: "app", Cluster: "app-db"}},
-		portForwardScript: script,
-	}
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	err := Connect(context.Background(), &out, &errOut, k, Options{OutputExplicit: true}, "app-db", nil, false)
-	if err == nil || !strings.Contains(err.Error(), "port-forward failed") || !strings.Contains(err.Error(), "pod gone") {
-		t.Fatalf("expected tunnel loss error, got %v", err)
-	}
-	if !strings.Contains(out.String(), "export PGHOST=127.0.0.1\n") {
-		t.Fatalf("values should have been printed once the tunnel was ready:\n%s", out.String())
-	}
-	if !strings.Contains(errOut.String(), "giving up after 5 reconnect attempts") {
-		t.Fatalf("stderr missing give-up message:\n%s", errOut.String())
-	}
-	if k.portForwardCalls != 1+maxReconnectAttempts {
-		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
+	if k.calls() != 1 {
+		t.Fatalf("portForwardCalls = %d, want no reconnect before readiness", k.calls())
 	}
 }
 
@@ -509,8 +442,9 @@ func TestConnectWarnsWhenNoCredentialsFound(t *testing.T) {
 	k := &fakeKube{
 		targets: []Target{{Namespace: "app", Cluster: "app-db", User: "owner", SecretName: "app-db-app"}},
 	}
+	ctx, out := untilRendered(t)
 	var errOut bytes.Buffer
-	if err := Connect(context.Background(), io.Discard, &errOut, k, Options{OutputExplicit: true}, "app-db", nil, false); err != nil {
+	if err := Connect(ctx, out, &errOut, k, Options{OutputExplicit: true}, "app-db", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(errOut.String(), "warning: no credentials found for user owner in secret app/app-db-app") {
@@ -561,23 +495,8 @@ func TestConnectRejectsOutputWithCommand(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--output cannot be combined") {
 		t.Fatalf("expected output command conflict, got %v", err)
 	}
-	if k.portForwardCalls != 0 {
-		t.Fatalf("portForwardCalls = %d", k.portForwardCalls)
-	}
-}
-
-func TestReconnectDelayStartsImmediatelyAndBacksOff(t *testing.T) {
-	want := []time.Duration{0, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
-	var total time.Duration
-	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
-		got := reconnectDelay(attempt)
-		if got != want[attempt-1] {
-			t.Fatalf("delay before attempt %d = %s, want %s", attempt, got, want[attempt-1])
-		}
-		total += got
-	}
-	if total != 15*time.Second {
-		t.Fatalf("total reconnect window = %s, want 15s", total)
+	if k.calls() != 0 {
+		t.Fatalf("portForwardCalls = %d", k.calls())
 	}
 }
 
@@ -609,5 +528,43 @@ func TestPsqlReconnectCommand(t *testing.T) {
 				t.Fatal("the reconnect hint must not contain the password")
 			}
 		})
+	}
+}
+
+func TestConnectReportsTunnelLossWhileCommandRuns(t *testing.T) {
+	k := &fakeKube{
+		targets: []Target{{Namespace: "app", Cluster: "app-db"}},
+		portForwardScript: []func(ready chan struct{}) error{
+			func(ready chan struct{}) error {
+				close(ready)
+				return errors.New("lost connection to pod")
+			},
+		},
+	}
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Connect(context.Background(), &out, &errOut, k, Options{}, "app-db", []string{"sh", "-c", "sleep 0.2; printf ok"}, false)
+	if err != nil {
+		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
+	}
+	if out.String() != "ok" {
+		t.Fatalf("command output = %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "port-forward to app/app-db lost (pod app-db-1): lost connection to pod; new connections wait up to") {
+		t.Fatalf("missing loss message:\n%s", errOut.String())
+	}
+}
+
+func TestConnectServesTheLocalPortThroughTheProxy(t *testing.T) {
+	k := &fakeKube{targets: []Target{{Namespace: "app", Cluster: "app-db"}}}
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	script := `exec 3<>/dev/tcp/127.0.0.1/$PGPORT 2>/dev/null || { printf no-bash-tcp; exit 0; }; head -n1 <&3`
+	err := Connect(context.Background(), &out, &errOut, k, Options{}, "app-db", []string{"bash", "-c", script}, false)
+	if err != nil {
+		t.Fatalf("Connect error = %v, stderr = %s", err, errOut.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "app-db-1" && got != "no-bash-tcp" {
+		t.Fatalf("client reached %q through the proxy, want app-db-1", got)
 	}
 }

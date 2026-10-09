@@ -108,5 +108,12 @@ type Kube interface {
 	ListTargets(ctx context.Context, opts Options) ([]Target, error)
 	EnrichTarget(ctx context.Context, t Target) (Target, error)
 	ResolveConnection(ctx context.Context, opts Options, t Target) (Target, AppSecret, error)
-	PortForward(ctx context.Context, opts Options, t Target, localPort int, out io.Writer, errOut io.Writer, readyCh chan struct{}) error
+	// ServicePod returns the pod that new connections should use: a running
+	// pod behind the target's read-write service, preferring ready ones.
+	// ready reports whether that pod passes its readiness check.
+	ServicePod(ctx context.Context, t Target) (pod string, ready bool, err error)
+	// PortForward forwards 127.0.0.1:localPort to the Postgres port of pod
+	// until ctx ends or the stream breaks. readyCh is closed once the local
+	// port accepts connections.
+	PortForward(ctx context.Context, opts Options, t Target, pod string, localPort int, errOut io.Writer, readyCh chan struct{}) error
 }

@@ -25,12 +25,26 @@ import (
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
-func (c *Client) PortForward(ctx context.Context, _ kpg.Options, t kpg.Target, localPort int, _ io.Writer, errOut io.Writer, readyCh chan struct{}) error {
-	pod, remotePort, err := c.resolveServicePod(ctx, t)
+// ServicePod returns the pod new connections should go to and whether it is
+// ready. Terminating pods are never chosen.
+func (c *Client) ServicePod(ctx context.Context, t kpg.Target) (string, bool, error) {
+	pod, _, err := c.resolveServicePod(ctx, t)
+	if err != nil {
+		return "", false, err
+	}
+	return pod.Name, podReady(pod), nil
+}
+
+func (c *Client) PortForward(ctx context.Context, _ kpg.Options, t kpg.Target, pod string, localPort int, errOut io.Writer, readyCh chan struct{}) error {
+	service, err := c.core.CoreV1().Services(t.Namespace).Get(ctx, serviceNameFor(t), metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
-	target, err := portForwardURL(c.restConfig, t.Namespace, pod.Name)
+	remotePort, err := serviceRemotePort(service)
+	if err != nil {
+		return err
+	}
+	target, err := portForwardURL(c.restConfig, t.Namespace, pod)
 	if err != nil {
 		return err
 	}
@@ -86,11 +100,15 @@ func portForwardDialer(config *rest.Config, target *url.URL) (streamhttp.Dialer,
 	}), nil
 }
 
-func (c *Client) resolveServicePod(ctx context.Context, t kpg.Target) (*corev1.Pod, int32, error) {
-	serviceName := t.ServiceName
-	if serviceName == "" {
-		serviceName = t.Cluster + "-rw"
+func serviceNameFor(t kpg.Target) string {
+	if t.ServiceName != "" {
+		return t.ServiceName
 	}
+	return t.Cluster + "-rw"
+}
+
+func (c *Client) resolveServicePod(ctx context.Context, t kpg.Target) (*corev1.Pod, int32, error) {
+	serviceName := serviceNameFor(t)
 	service, err := c.core.CoreV1().Services(t.Namespace).Get(ctx, serviceName, metav1.GetOptions{})
 	if err != nil {
 		return nil, 0, err
