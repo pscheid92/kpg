@@ -43,14 +43,16 @@ race:
 build:
     go build .
 
-# Compile for every release target without writing binaries.
+# Compile every release target with the same settings as .goreleaser.yml
+# (CGO off, -trimpath), without keeping the binaries. Matching settings let CI
+# reuse this build cache for releases; keep both in sync.
 cross:
-    GOOS=linux GOARCH=amd64 go build ./...
-    GOOS=linux GOARCH=arm64 go build ./...
-    GOOS=darwin GOARCH=amd64 go build ./...
-    GOOS=darwin GOARCH=arm64 go build ./...
-    GOOS=windows GOARCH=amd64 go build ./...
-    GOOS=windows GOARCH=arm64 go build ./...
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /dev/null .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /dev/null .
+    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o /dev/null .
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /dev/null .
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o /dev/null .
+    CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -o /dev/null .
 
 check: test vet lint fix-check build
 

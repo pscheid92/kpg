@@ -69,17 +69,44 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just race
 
+  # Builds every release target with GoReleaser's settings. On main it also
+  # saves the build cache that the release workflow restores, which turns the
+  # release build from minutes into seconds. The key changes with the Go
+  # version and go.sum; kpg's own packages are recompiled in seconds anyway.
   cross-compile:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Locate the Go caches
+        id: go-env
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Restore the release build cache
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.build }}
+            ${{ steps.go-env.outputs.modules }}
+          key: release-build-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: release-build-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just cross
+      - name: Save the release build cache
+        if: github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.build }}
+            ${{ steps.go-env.outputs.modules }}
+          key: release-build-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
 
   vulnerabilities:
     runs-on: ubuntu-latest
