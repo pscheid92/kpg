@@ -60,7 +60,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           PQSIGN_SECRET_KEY_PATH: ${{ env.PQSIGN_SECRET_KEY_PATH }}
           PQSIGN_PASSWORD: ${{ secrets.PQSIGN_PASSWORD }}
       - name: Attest build provenance
