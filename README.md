@@ -129,8 +129,23 @@ removes `PGSERVICE`, `PGSERVICEFILE`, and `PGHOSTADDR` from the program's
 environment because libpq would let them override the tunnel.
 
 If the tunnel drops, for example because the primary moved to another pod
-during a switchover, `kpg` re-establishes it up to five times with a growing
-pause and reports on stderr. `psql` reconnects on its next statement.
+during a failover, `kpg` re-establishes it on the same local port: once
+immediately, then with pauses of 1, 2, 4, and 8 seconds. Sessions that were
+open before the loss end with it. `psql` usually tries to reset before the
+tunnel is back and then gives up, so `kpg` prints the command that reconnects
+it, for example:
+
+```text
+port-forward to secretli/secretli-db re-established on 127.0.0.1:51664
+sessions opened before the loss must reconnect; in psql run: \c "host=127.0.0.1 port=51664 dbname=secretli user=secretli"
+```
+
+An open session also delays a CloudNativePG failover by up to the cluster's
+`smartShutdownTimeout`, because the old primary waits for existing
+connections before it stops.
+
+`kpg` suppresses client-go's internal log lines so they do not interrupt an
+interactive session. Set `KPG_DEBUG=1` to see them.
 
 Use `--output` to print connection values instead of entering a subshell or running a command. The values are printed once the tunnel accepts connections, and `kpg connect` then keeps the tunnel alive in the foreground until Ctrl-C:
 
