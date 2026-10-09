@@ -6,7 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
+	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -16,49 +17,32 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 
 	"github.com/pscheid92/kpg/internal/kpg"
 )
 
-func (c *Client) PortForward(ctx context.Context, opts kpg.Options, t kpg.Target, localPort int, _ io.Writer, errOut io.Writer, readyCh chan struct{}) error {
+func (c *Client) PortForward(ctx context.Context, _ kpg.Options, t kpg.Target, localPort int, _ io.Writer, errOut io.Writer, readyCh chan struct{}) error {
 	pod, remotePort, err := c.resolveServicePod(ctx, t)
 	if err != nil {
 		return err
 	}
-
-	restConfig := rest.CopyConfig(c.restConfig)
-	restConfig.APIPath = "/api"
-	restConfig.GroupVersion = &corev1.SchemeGroupVersion
-	restConfig.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
-
-	roundTripper, upgrader, err := spdy.RoundTripperFor(restConfig)
+	target, err := portForwardURL(c.restConfig, t.Namespace, pod.Name)
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", t.Namespace, pod.Name)
-	hostIP := strings.TrimPrefix(restConfig.Host, "https://")
-	hostIP = strings.TrimPrefix(hostIP, "http://")
-	serverURL := &url.URL{Scheme: "https", Path: path, Host: hostIP}
-	if strings.HasPrefix(restConfig.Host, "http://") {
-		serverURL.Scheme = "http"
+	dialer, err := portForwardDialer(c.restConfig, target)
+	if err != nil {
+		return err
 	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: roundTripper}, http.MethodPost, serverURL)
-
-	stopCh := make(chan struct{})
 	if readyCh == nil {
 		readyCh = make(chan struct{})
 	}
-	go func() {
-		<-ctx.Done()
-		close(stopCh)
-	}()
-
 	ports := []string{strconv.Itoa(localPort) + ":" + strconv.Itoa(int(remotePort))}
-	forwarder, err := portforward.NewOnAddresses(dialer, []string{"127.0.0.1"}, ports, stopCh, readyCh, io.Discard, errOut)
+	forwarder, err := portforward.NewOnAddressesForStreamingWithContext(ctx, dialer, []string{"127.0.0.1"}, ports, readyCh, io.Discard, errOut)
 	if err != nil {
 		return err
 	}
@@ -67,6 +51,39 @@ func (c *Client) PortForward(ctx context.Context, opts kpg.Options, t kpg.Target
 		return ctx.Err()
 	}
 	return err
+}
+
+// portForwardURL builds the pod portforward subresource URL the way the REST
+// client does, so API servers behind a path prefix (Rancher, some ingress
+// setups) and hosts written with a trailing slash keep working.
+func portForwardURL(config *rest.Config, namespace string, pod string) (*url.URL, error) {
+	cfg := rest.CopyConfig(config)
+	cfg.APIPath = "/api"
+	cfg.GroupVersion = &corev1.SchemeGroupVersion
+	base, versionedAPIPath, err := rest.DefaultServerUrlFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	target := *base
+	target.Path = path.Join(base.Path, versionedAPIPath, "namespaces", namespace, "pods", pod, "portforward")
+	return &target, nil
+}
+
+// portForwardDialer prefers the WebSocket tunnel that current kubectl uses
+// and falls back to SPDY for API servers or proxies that reject the upgrade.
+func portForwardDialer(config *rest.Config, target *url.URL) (streamhttp.Dialer, error) {
+	transport, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return nil, err
+	}
+	spdyDialer := spdy.NewDialerForStreaming(upgrader, &http.Client{Transport: transport}, http.MethodPost, target)
+	websocketDialer, err := portforward.NewSPDYOverWebsocketDialerForStreaming(target, config)
+	if err != nil {
+		return nil, err
+	}
+	return portforward.NewFallbackDialerForStreaming(websocketDialer, spdyDialer, func(err error) bool {
+		return streamhttp.IsUpgradeFailure(err) || streamhttp.IsHTTPSProxyError(err)
+	}), nil
 }
 
 func (c *Client) resolveServicePod(ctx context.Context, t kpg.Target) (*corev1.Pod, int32, error) {
@@ -133,10 +150,10 @@ func (c *Client) podsFromEndpointSlices(ctx context.Context, namespace, serviceN
 	return pods, nil
 }
 
-func endpointSlicePodNames(slices []discoveryv1.EndpointSlice) []string {
+func endpointSlicePodNames(endpointSlices []discoveryv1.EndpointSlice) []string {
 	var names []string
 	seen := map[string]struct{}{}
-	for _, slice := range slices {
+	for _, slice := range endpointSlices {
 		for _, endpoint := range slice.Endpoints {
 			if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" || endpoint.TargetRef.Name == "" {
 				continue
@@ -158,8 +175,8 @@ func pickPodForPortForward(pods []corev1.Pod, namespace, serviceName string) (*c
 			candidates = append(candidates, pod)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Name < candidates[j].Name
+	slices.SortFunc(candidates, func(a, b corev1.Pod) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 	for i := range candidates {
 		if podReady(&candidates[i]) {

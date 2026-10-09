@@ -3,8 +3,11 @@ package kube
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,7 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
@@ -187,7 +192,7 @@ func TestListTargetsReturnsPartialWhenOneProviderForbidden(t *testing.T) {
 func TestResolveConnectionReadsCredentialsAndHandlesMissingSecret(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "app-db-app", Namespace: "app"},
+			Name: "app-db-app", Namespace: "app",
 			Data: map[string][]byte{
 				"username": []byte("appuser"),
 				"password": []byte("secret"),
@@ -195,7 +200,7 @@ func TestResolveConnectionReadsCredentialsAndHandlesMissingSecret(t *testing.T) 
 			},
 		},
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "app_user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy"},
+			Name: "app_user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy",
 			Data: map[string][]byte{
 				"username": []byte("app_user"),
 				"password": []byte("zalando-secret"),
@@ -244,9 +249,9 @@ func TestResolveConnectionReadsCredentialsAndHandlesMissingSecret(t *testing.T) 
 
 func TestListNamespaces(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "billing"}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "app"}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "identity"}},
+		&corev1.Namespace{Name: "billing"},
+		&corev1.Namespace{Name: "app"},
+		&corev1.Namespace{Name: "identity"},
 	})
 
 	names, err := c.ListNamespaces(context.Background())
@@ -272,13 +277,13 @@ func TestContextNamesFromConfig(t *testing.T) {
 func TestResolveConnectionFallsBackToTargetMetadata(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "app-db-app", Namespace: "app"},
+			Name: "app-db-app", Namespace: "app",
 			Data: map[string][]byte{
 				"password": []byte("secret"),
 			},
 		},
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "legacy-db-app", Namespace: "app"},
+			Name: "legacy-db-app", Namespace: "app",
 			Data: map[string][]byte{
 				"username": []byte("legacy"),
 				"database": []byte("legacydb"),
@@ -321,7 +326,7 @@ func TestResolveConnectionFallsBackToTargetMetadata(t *testing.T) {
 func TestResolveConnectionRecomputesZalandoSecretForUserOverride(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy"},
+			Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy",
 			Data: map[string][]byte{
 				"username": []byte("reporting_user"),
 				"password": []byte("rpw"),
@@ -352,7 +357,7 @@ func TestResolveConnectionRecomputesZalandoSecretForUserOverride(t *testing.T) {
 func TestResolveConnectionUsesZalandoDatabaseOwnerWhenUserIsNotExplicit(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy"},
+			Name: "reporting-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "legacy",
 			Data: map[string][]byte{
 				"username": []byte("reporting_user"),
 				"password": []byte("rpw"),
@@ -379,7 +384,7 @@ func TestResolveConnectionUsesZalandoDatabaseOwnerWhenUserIsNotExplicit(t *testi
 func TestResolveConnectionNormalizesZalandoCrossNamespaceUser(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "db-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "appspace"},
+			Name: "db-user.acid-main.credentials.postgresql.acid.zalan.do", Namespace: "appspace",
 			Data: map[string][]byte{
 				"username": []byte("db_user"),
 				"password": []byte("crosspw"),
@@ -397,5 +402,52 @@ func TestResolveConnectionNormalizesZalandoCrossNamespaceUser(t *testing.T) {
 	}
 	if target.User != "db_user" || target.SecretNamespace != "appspace" || target.SecretName != "db-user.acid-main.credentials.postgresql.acid.zalan.do" || secret.Password != "crosspw" {
 		t.Fatalf("unexpected cross-namespace connection: target=%#v secret=%#v", target, secret)
+	}
+}
+
+func TestNewAppliesRequestTimeoutOnlyToAPIClients(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config")
+	kubeconfig := []byte(`apiVersion: v1
+kind: Config
+current-context: test
+clusters:
+  - name: test
+    cluster:
+      server: https://127.0.0.1:1
+users:
+  - name: test
+    user:
+      token: dummy
+contexts:
+  - name: test
+    context:
+      cluster: test
+      user: test
+      namespace: team
+`)
+	if err := os.WriteFile(configPath, kubeconfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", configPath)
+
+	c, err := New(kpg.Options{RequestTimeout: 7 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.defaultNamespace != "team" {
+		t.Fatalf("default namespace = %q", c.defaultNamespace)
+	}
+	if c.restConfig.Timeout != 0 {
+		t.Fatalf("port-forward config timeout = %s, want none", c.restConfig.Timeout)
+	}
+	if !strings.HasPrefix(c.restConfig.UserAgent, "kpg/") {
+		t.Fatalf("user agent = %q", c.restConfig.UserAgent)
+	}
+	restClient, ok := c.core.(*kubernetes.Clientset).CoreV1().RESTClient().(*rest.RESTClient)
+	if !ok {
+		t.Fatalf("unexpected rest client type %T", c.core.(*kubernetes.Clientset).CoreV1().RESTClient())
+	}
+	if restClient.Client.Timeout != 7*time.Second {
+		t.Fatalf("api client timeout = %s, want 7s", restClient.Client.Timeout)
 	}
 }

@@ -8,9 +8,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/portforward"
 
 	"github.com/pscheid92/kpg/internal/kpg"
 )
@@ -37,7 +38,7 @@ func TestResolveServicePodSelectsReadyRunningPod(t *testing.T) {
 func TestResolveServicePodUsesZalandoRWServiceName(t *testing.T) {
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "acid-main", Namespace: "legacy"},
+			Name: "acid-main", Namespace: "legacy",
 			Spec: corev1.ServiceSpec{
 				Selector: map[string]string{"cluster-name": "acid-main", "spilo-role": "master"},
 				Ports:    []corev1.ServicePort{{Name: "postgres", Port: 5432}},
@@ -64,15 +65,13 @@ func TestResolveServicePodFallsBackToEndpointSlicesForSelectorlessService(t *tes
 	ready := true
 	c := fakeClient(nil, []runtime.Object{
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "acid-main", Namespace: "legacy"},
-			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
+			Name: "acid-main", Namespace: "legacy",
+			Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
 		},
 		&discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "acid-main-xyz",
-				Namespace: "legacy",
-				Labels:    map[string]string{discoveryv1.LabelServiceName: "acid-main"},
-			},
+			Name:        "acid-main-xyz",
+			Namespace:   "legacy",
+			Labels:      map[string]string{discoveryv1.LabelServiceName: "acid-main"},
 			AddressType: discoveryv1.AddressTypeIPv4,
 			Endpoints: []discoveryv1.Endpoint{{
 				Addresses:  []string{"10.0.0.1"},
@@ -112,8 +111,8 @@ func TestResolveServicePodErrors(t *testing.T) {
 	t.Run("selectorless service with no endpoints", func(t *testing.T) {
 		c := fakeClient(nil, []runtime.Object{
 			&corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: "app-db-rw", Namespace: "app"},
-				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
+				Name: "app-db-rw", Namespace: "app",
+				Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "postgres", Port: 5432}}},
 			},
 		})
 		_, _, err := c.resolveServicePod(context.Background(), kpg.Target{Namespace: "app", Cluster: "app-db"})
@@ -171,4 +170,36 @@ func TestServiceRemotePortSelection(t *testing.T) {
 			t.Fatalf("expected ambiguity, got %v", err)
 		}
 	})
+}
+
+func TestPortForwardURLKeepsServerPathPrefix(t *testing.T) {
+	cases := map[string]string{
+		"https://api.example.com:6443":                        "https://api.example.com:6443/api/v1/namespaces/app/pods/app-db-1/portforward",
+		"https://rancher.example.com/k8s/clusters/c-m-abc123": "https://rancher.example.com/k8s/clusters/c-m-abc123/api/v1/namespaces/app/pods/app-db-1/portforward",
+		"https://10.0.0.1:6443/":                              "https://10.0.0.1:6443/api/v1/namespaces/app/pods/app-db-1/portforward",
+		"http://localhost:8080":                               "http://localhost:8080/api/v1/namespaces/app/pods/app-db-1/portforward",
+	}
+	for host, want := range cases {
+		got, err := portForwardURL(&rest.Config{Host: host}, "app", "app-db-1")
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		if got.String() != want {
+			t.Fatalf("%s: url = %q, want %q", host, got.String(), want)
+		}
+	}
+}
+
+func TestPortForwardDialerPrefersWebsocketWithSPDYFallback(t *testing.T) {
+	target, err := portForwardURL(&rest.Config{Host: "https://api.example.com"}, "app", "app-db-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer, err := portForwardDialer(&rest.Config{Host: "https://api.example.com"}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dialer.(*portforward.StreamingFallbackDialer); !ok {
+		t.Fatalf("dialer = %T, want fallback dialer", dialer)
+	}
 }

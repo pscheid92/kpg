@@ -96,7 +96,7 @@ func zalandoCluster(namespace string, name string, databases map[string]string, 
 
 func rwService(namespace string, cluster string, selector map[string]string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: cluster + "-rw", Namespace: namespace},
+		Name: cluster + "-rw", Namespace: namespace,
 		Spec: corev1.ServiceSpec{
 			Selector: selector,
 			Ports: []corev1.ServicePort{{
@@ -113,7 +113,7 @@ func pod(namespace string, name string, labels map[string]string, phase corev1.P
 		status = corev1.ConditionTrue
 	}
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels},
+		Name: name, Namespace: namespace, Labels: labels,
 		Status: corev1.PodStatus{
 			Phase: phase,
 			Conditions: []corev1.PodCondition{{

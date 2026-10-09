@@ -3,6 +3,7 @@ package kpg
 import (
 	"context"
 	"io"
+	"time"
 )
 
 const (
@@ -22,6 +23,10 @@ type Options struct {
 	LocalPort      int
 	Output         string
 	OutputExplicit bool
+	// RequestTimeout bounds discovery, list, and get calls against the API
+	// server. Zero leaves them unbounded. The port-forward stream itself is
+	// never limited.
+	RequestTimeout time.Duration
 	Selection      Selection
 }
 
@@ -44,6 +49,9 @@ type Target struct {
 	DatabaseOptions []string
 	UserOptions     []string
 	DatabaseOwners  map[string]string
+	// UserSecrets maps a user to the secret that stores its password when the
+	// provider knows it from the cluster spec.
+	UserSecrets map[string]string
 }
 
 type ListTarget struct {
