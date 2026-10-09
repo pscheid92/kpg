@@ -84,18 +84,27 @@ homebrew_casks:
     repository:
       owner: pscheid92
       name: homebrew-tap
-      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
-    # Publishing needs a token with write access to the tap repository; without
-    # one the cask is only rendered into dist/ so releases still succeed.
-    skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
-    hooks:
-      post:
-        # The binaries are not notarized, so clear the quarantine flag that
-        # Gatekeeper would otherwise use to block them.
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kpg"]
-          end
+      branch: main
+      # Pushed over SSH with a deploy key that can only write to the tap.
+      git:
+        url: git@github.com:pscheid92/homebrew-tap.git
+        private_key: '{{ envOrDefault "HOMEBREW_TAP_DEPLOY_KEY" "" }}'
+    commit_msg_template: "Update kpg to {{ .Version }}"
+    # Without the deploy key the cask is only rendered into dist/, so local
+    # snapshots and forks still release.
+    skip_upload: '{{ if envOrDefault "HOMEBREW_TAP_DEPLOY_KEY" "" }}false{{ else }}true{{ end }}'
+    # The binaries are not notarized, so the quarantine flag Homebrew sets
+    # would make Gatekeeper block them. Homebrew 7 deprecates the postflight
+    # block GoReleaser's hooks generate in favour of postflight_steps, which
+    # GoReleaser cannot render yet, hence the custom block. GoReleaser applies
+    # its templates to the whole cask, so Homebrew's {{staged_path}} token is
+    # escaped.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/kpg"]
+        end
+      end
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

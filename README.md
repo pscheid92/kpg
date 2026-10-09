@@ -106,7 +106,7 @@ The release workflow expects these GitHub repository secrets:
 
 - `PQSIGN_SECRET_KEY`: base64-encoded encrypted pqsign secret key file matching `release.key.pub` (key ID `7F732E590ED14C12`)
 - `PQSIGN_PASSWORD`: password for that secret key
-- `HOMEBREW_TAP_GITHUB_TOKEN` (optional): token with write access to `pscheid92/homebrew-tap`; without it the Homebrew cask is only rendered into `dist/`
+- `HOMEBREW_TAP_DEPLOY_KEY` (optional): private SSH key whose public half is a write-enabled deploy key on `pscheid92/homebrew-tap`; without it the Homebrew cask is only rendered into `dist/`
 
 ## Connecting
 
