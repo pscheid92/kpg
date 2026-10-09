@@ -34,9 +34,26 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Locate the Go caches
+        id: go-env
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # Saved by CI's cross-compile job on main with GoReleaser's build
+      # settings. Tag runs may read caches from the default branch. Without a
+      # cache the release simply builds from scratch.
+      - name: Restore the release build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-env.outputs.build }}
+            ${{ steps.go-env.outputs.modules }}
+          key: release-build-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: release-build-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-
       - name: Install syft for SBOM generation
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.3
       - name: Install pqsign
