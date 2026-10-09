@@ -81,11 +81,20 @@ git push origin v0.1.0
 Each release ships, per archive, a [`pqsign`](https://github.com/pscheid92/pqsign)
 signature (`.pqsig`) and an SPDX SBOM (`.sbom.json`), plus a signed
 `checksums.txt` and a GitHub build provenance attestation. Verify an archive with
-the committed release public key:
+the release public key that signed it:
+
+| Releases | Public key | Key ID |
+|---|---|---|
+| v0.3.0 and later | `release.key.pub` | `7F732E590ED14C12` |
+| v0.1.0 to v0.2.1 | `release-keys/kpg-D46757F2C0A16369.pub` | `D46757F2C0A16369` |
 
 ```sh
-pqsign verify kpg_0.1.0_linux_amd64.tar.gz -p release.key.pub
+pqsign verify kpg_0.3.0_linux_amd64.tar.gz -p release.key.pub
 ```
+
+The key changed on 2026-10-09 because the secret half of the previous key was
+lost; it was not compromised. Nothing signed the new key with the old one, so
+check the key ID against the table above and against the v0.3.0 release notes.
 
 and its provenance with:
 
@@ -95,7 +104,7 @@ gh attestation verify kpg_0.1.0_linux_amd64.tar.gz --owner pscheid92
 
 The release workflow expects these GitHub repository secrets:
 
-- `PQSIGN_SECRET_KEY`: base64-encoded encrypted pqsign secret key file matching `release.key.pub`
+- `PQSIGN_SECRET_KEY`: base64-encoded encrypted pqsign secret key file matching `release.key.pub` (key ID `7F732E590ED14C12`)
 - `PQSIGN_PASSWORD`: password for that secret key
 - `HOMEBREW_TAP_GITHUB_TOKEN` (optional): token with write access to `pscheid92/homebrew-tap`; without it the Homebrew cask is only rendered into `dist/`
 
